@@ -7,7 +7,7 @@ from streamlit_autorefresh import st_autorefresh
 import yfinance as yf
 
 st.set_page_config(layout="wide")
-st.title("Analisador de Criptomoedas com Alertas e Indicadores Técnicos")
+st.title("Análise de Criptomoedas e Sinais de Compra e Venda")
 
 # ---------------- INDICADORES ----------------
 
