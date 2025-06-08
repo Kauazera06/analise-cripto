@@ -166,14 +166,45 @@ def main():
         "KDJ_J": round(j, 2)
     })
 
-    # Gráficos
+    # Gráficos com descrições
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.plotly_chart(plot_candlestick(df, nome_moeda), use_container_width=True)
+        st.markdown("""
+        **Gráfico de Candlestick + EMA 14**  
+        Mostra o preço da criptomoeda com velas japonesas, que representam abertura, fechamento, máxima e mínima em cada período.  
+        A linha EMA 14 (Média Móvel Exponencial) ajuda a identificar tendências:  
+        - Se o preço estiver acima da EMA, tendência de alta.  
+        - Se estiver abaixo, tendência de baixa.  
+        Observe cruzamentos para sinais de compra ou venda.
+        """)
+
         st.plotly_chart(plot_rsi(df, nome_moeda), use_container_width=True)
+        st.markdown("""
+        **RSI (Índice de Força Relativa)**  
+        Indica se a moeda está sobrecomprada (>70) ou sobrevendida (<30).  
+        - Valores abaixo de 30 podem indicar oportunidade de compra.  
+        - Valores acima de 70 podem indicar que o preço vai cair (venda).  
+        Use junto com outros indicadores para confirmar.
+        """)
     with col_g2:
         st.plotly_chart(plot_stochrsi(df, nome_moeda), use_container_width=True)
+        st.markdown("""
+        **Stochastic RSI**  
+        Mede a velocidade e mudança do RSI.  
+        - Valores abaixo de 0.2 indicam sobrevenda, possível compra.  
+        - Valores acima de 0.8 indicam sobrecompra, possível venda.  
+        Ajuda a refinar os sinais do RSI convencional.
+        """)
+
         st.plotly_chart(plot_kdj(df, nome_moeda), use_container_width=True)
+        st.markdown("""
+        **Indicador KDJ**  
+        É uma variação do estocástico que inclui a linha J para antecipar reversões.  
+        - Cruzamento das linhas K e D indicam compra ou venda.  
+        - Valores altos da linha J (>80) indicam sobrecompra, possíveis vendas.  
+        - Valores baixos (<20) indicam sobrevenda, possíveis compras.
+        """)
 
     # Histórico
     st.subheader("Histórico dos últimos sinais")
