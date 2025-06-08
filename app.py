@@ -156,7 +156,6 @@ def plot_adx(df):
 # ---------------- APP ----------------
 
 def main():
-   def main():
     cripto_opcoes = {
         "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Solana": "SOL-USD",
         "Binance Coin": "BNB-USD", "Cardano": "ADA-USD", "Dogecoin": "DOGE-USD"
