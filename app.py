@@ -5,10 +5,7 @@ import plotly.graph_objects as go
 import requests
 import time
 from datetime import datetime
-from binance.client import Client
 
-# ========== CONEXÃO BINANCE (sem autenticação) ==========
-client = Client()  # público, sem chave/segredo
 
 # ========== INDICADORES ==========
 def EMA(df, period=14):
@@ -91,7 +88,11 @@ def enviar_alerta_telegram(mensagem):
 # ========== ANALISAR ==========
 def analisar(symbol, intervalo):
     try:
-        klines = client.get_klines(symbol=symbol, interval=intervalo, limit=500)
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={intervalo}&limit=500"
+        response = requests.get(url)
+        response.raise_for_status()
+        klines = response.json()
+
         df = pd.DataFrame(klines, columns=[
             'timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time',
             'quote_asset_volume', 'number_of_trades', 'taker_buy_base',
@@ -109,7 +110,7 @@ def analisar(symbol, intervalo):
     except Exception as e:
         st.error(f"Erro ao consultar dados da Binance: {e}")
         return pd.DataFrame()
-
+    
 # ========== STREAMLIT ==========
 st.set_page_config(layout="wide")
 st.title("📊 Análise Automática de Criptomoedas com Alertas Telegram")
