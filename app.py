@@ -191,40 +191,12 @@ def main():
     rsi = df.get('RSI_14', pd.Series()).iloc[-1]
     stoch_k = df.get('StochRSI_K', pd.Series()).iloc[-1]
     j = df.get('J', pd.Series()).iloc[-1]
-    macd = df.get('MACD', pd.Series()).iloc[-1]
-    macd_prev = df.get('MACD', pd.Series()).iloc[-2]
-    macd_signal = df.get('MACD_signal', pd.Series()).iloc[-1]
-    macd_signal_prev = df.get('MACD_signal', pd.Series()).iloc[-2]
-    adx = df.get('ADX', pd.Series()).iloc[-1]
-    plus_di = df.get('+DI', pd.Series()).iloc[-1]
-    minus_di = df.get('-DI', pd.Series()).iloc[-1]
-    boll_upper = df.get('BB_upper', pd.Series()).iloc[-1]
-    boll_lower = df.get('BB_lower', pd.Series()).iloc[-1]
-    close = df.get('close', pd.Series()).iloc[-1]
-
-# Regras
-    compra = (
-    rsi < 30 and
-    stoch_k < 0.2 and
-    j < 20 and
-    macd > macd_signal and macd_prev < macd_signal_prev and
-    adx > 25 and plus_di > minus_di and
-    close < boll_lower
-)
-
-    venda = (
-    rsi > 70 and
-    stoch_k > 0.8 and
-    j > 80 and
-    macd < macd_signal and macd_prev > macd_signal_prev and
-    adx > 25 and minus_di > plus_di and
-    close > boll_upper
-)
 
     sinal = "neutro"
-    if compra:
+    if pd.notna(rsi) and pd.notna(stoch_k) and pd.notna(j):
+        if rsi < 30 and stoch_k < 0.2 and j < 20:
             sinal = "compra"
-    elif venda:
+        elif rsi > 70 and stoch_k > 0.8 and j > 80:
             sinal = "venda"
 
     if sinal != st.session_state.ultimo_sinal:
