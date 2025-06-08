@@ -143,6 +143,56 @@ def gerar_sinal(df):
 
     return final, sinais
 
+# ---------------- GRÁFICOS ----------------
+
+def plot_candlestick(df, nome):
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"],
+        increasing_line_color='green', decreasing_line_color='red'
+    ))
+    fig.add_trace(go.Scatter(x=df.index, y=df["EMA_14"], name="EMA 14", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["BB_Upper"], name="Bollinger Upper", line=dict(color="purple", dash="dot")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["BB_Lower"], name="Bollinger Lower", line=dict(color="purple", dash="dot")))
+    fig.update_layout(title=f"{nome} - Preço + Indicadores", height=600)
+    return fig
+
+def plot_rsi(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["RSI_14"], name="RSI", line=dict(color="green")))
+    fig.update_layout(title="RSI", yaxis=dict(range=[0, 100]), height=300)
+    return fig
+
+def plot_stochrsi(df): 
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["StochRSI_K"], name="StochRSI K", line=dict(color="teal")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["StochRSI_D"], name="StochRSI D", line=dict(color="orange")))
+    fig.update_layout(title="Stochastic RSI", yaxis=dict(range=[0, 1]), height=300)
+    return fig
+
+def plot_kdj(df): 
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["K"], name="K", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["D"], name="D", line=dict(color="red")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["J"], name="J", line=dict(color="purple")))
+    fig.update_layout(title="Indicador KDJ", height=300)
+    return fig
+
+def plot_macd(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="MACD", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["MACD_Signal"], name="Signal", line=dict(color="orange")))
+    fig.add_trace(go.Bar(x=df.index, y=df["MACD_Hist"], name="Histograma", marker_color="gray"))
+    fig.update_layout(title="MACD", height=300)
+    return fig
+
+def plot_adx(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["ADX"], name="ADX", line=dict(color="red")))
+    fig.update_layout(title="ADX", height=300)
+    return fig
+
 # ---------------- APP ----------------
 
 def main():
