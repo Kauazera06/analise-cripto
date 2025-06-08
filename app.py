@@ -73,8 +73,6 @@ def ADX(df, period=14):
     minus_di = abs(100 * (minus_dm.ewm(alpha=1/period).mean() / atr))
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
     adx = dx.ewm(alpha=1/period).mean()
-    df['+DI'] = plus_di
-    df['-DI'] = minus_di
     return adx
 
 # ---------------- ALERTAS TELEGRAM ----------------
@@ -104,44 +102,6 @@ def obter_dados(symbol, period, interval):
     df['SMA'], df['BB_Upper'], df['BB_Lower'] = Bollinger_Bands(df)
     df['ADX'] = ADX(df)
     return df
-
-# ---------------- SINAL DE ALERTA ----------------
-
-def gerar_sinal(df):
-    rsi = df['RSI_14'].iloc[-1]
-    stoch_k = df['StochRSI_K'].iloc[-1]
-    stoch_d = df['StochRSI_D'].iloc[-1]
-    k = df['K'].iloc[-1]
-    d = df['D'].iloc[-1]
-    j = df['J'].iloc[-1]
-    macd = df['MACD'].iloc[-1]
-    macd_signal = df['MACD_Signal'].iloc[-1]
-    adx = df['ADX'].iloc[-1]
-    plus_di = df['+DI'].iloc[-1]
-    minus_di = df['-DI'].iloc[-1]
-
-    rsi_signal = 'buy' if rsi < 30 else 'sell' if rsi > 70 else ''
-    stoch_signal = 'buy' if stoch_k < 0.2 and stoch_d < 0.2 else 'sell' if stoch_k > 0.8 and stoch_d > 0.8 else ''
-    kdj_signal = 'buy' if j < 20 and k < 20 and d < 20 else 'sell' if j > 80 and k > 80 and d > 80 else ''
-    macd_cross = 'buy' if macd > macd_signal else 'sell' if macd < macd_signal else ''
-    adx_signal = 'buy' if adx > 20 and plus_di > minus_di else 'sell' if adx > 20 and plus_di < minus_di else ''
-
-    sinais = {
-        "RSI": rsi_signal,
-        "StochRSI": stoch_signal,
-        "KDJ": kdj_signal,
-        "MACD": macd_cross,
-        "ADX": adx_signal
-    }
-
-    if all(v == 'buy' for v in sinais.values()):
-        final = 'compra'
-    elif all(v == 'sell' for v in sinais.values()):
-        final = 'venda'
-    else:
-        final = 'neutro'
-
-    return final, sinais
 
 # ---------------- GRÁFICOS ----------------
 
@@ -228,20 +188,29 @@ def main():
         st.warning("Sem dados suficientes.")
         return
 
-    sinal, sinais = gerar_sinal(df)
+    rsi = df.get('RSI_14', pd.Series()).iloc[-1]
+    stoch_k = df.get('StochRSI_K', pd.Series()).iloc[-1]
+    j = df.get('J', pd.Series()).iloc[-1]
+
+    sinal = "neutro"
+    if pd.notna(rsi) and pd.notna(stoch_k) and pd.notna(j):
+        if rsi < 30 and stoch_k < 0.2 and j < 20:
+            sinal = "compra"
+        elif rsi > 70 and stoch_k > 0.8 and j > 80:
+            sinal = "venda"
 
     if sinal != st.session_state.ultimo_sinal:
-        mensagem = f"{'🚀 COMPRA' if sinal == 'compra' else '⚠️ VENDA'} para {nome_moeda} com sinais:\n" + \
-                   "\n".join([f"{k}: {v}" for k, v in sinais.items()])
-        enviar_alerta_telegram(mensagem)
-        st.toast(mensagem)
+        msg = f"{'🚀 COMPRA' if sinal == 'compra' else '⚠️ VENDA'} para {nome_moeda} (RSI={rsi:.2f}, StochRSI_K={stoch_k:.2f}, J={j:.2f})"
+        enviar_alerta_telegram(msg)
+        st.toast(msg)
         st.session_state.ultimo_sinal = sinal
     else:
         st.info(f"Sinal atual: {sinal}.")
 
     st.session_state.historico.append({
         "timestamp": pd.Timestamp.now(), "moeda": nome_moeda,
-        "sinal": sinal, **{k: v for k, v in sinais.items()}
+        "sinal": sinal, "RSI": round(rsi, 2),
+        "StochRSI_K": round(stoch_k, 2), "KDJ_J": round(j, 2)
     })
 
     # Gráficos em ordem vertical e explicações detalhadas
