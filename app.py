@@ -3,8 +3,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import requests
-import time
-import ta
+from ta.momentum import RSIIndicator, StochRSIIndicator
+from ta.trend import MACD, SMAIndicator, EMAIndicator
 
 st.set_page_config(layout="wide")
 st.title("Analisador de Criptomoedas com Indicadores Técnicos")
@@ -38,75 +38,75 @@ with col2:
 with col3:
     atualizar = st.number_input("Atualizar a cada X segundos", min_value=10, max_value=3600, value=60, step=10)
 
-# Obter e processar dados
-df = obter_dados(simbolo.upper(), intervalo)
+# Botão para executar análise
+if st.button("Analisar"):
+    df = obter_dados(simbolo.upper(), intervalo)
 
-if df.empty:
-    st.warning("Nenhum dado disponível. Verifique o símbolo ou tente novamente mais tarde.")
-    st.stop()
+    if df.empty:
+        st.warning("Nenhum dado disponível. Verifique o símbolo ou tente novamente mais tarde.")
+        st.stop()
 
-# Calcular indicadores técnicos
-try:
-    df["MA"] = df["close"].rolling(window=20).mean()
-    df["EMA"] = df["close"].ewm(span=20, adjust=False).mean()
-    df["Volatility"] = df["close"].rolling(window=20).std()
-    df["RSI"] = ta.RSI(df["close"], timeperiod=14)
+    try:
+        # Indicadores
+        df["MA20"] = SMAIndicator(df["close"], window=20).sma_indicator()
+        df["EMA20"] = EMAIndicator(df["close"], window=20).ema_indicator()
+        df["Volatility"] = df["close"].rolling(window=20).std()
+        df["RSI"] = RSIIndicator(df["close"], window=14).rsi()
 
-    macd, macdsignal, macdhist = ta.MACD(df["close"])
-    df["MACD"] = macd
-    df["MACD_signal"] = macdsignal
-    df["MACD_hist"] = macdhist
+        macd = MACD(df["close"])
+        df["MACD"] = macd.macd()
+        df["MACD_signal"] = macd.macd_signal()
+        df["MACD_hist"] = macd.macd_diff()
 
-    if intervalo == "1m" and isinstance(len(df), int) and len(df) >= 300:
-        stochrsi, _ = ta.STOCHRSI(df["close"], timeperiod=14)
-        df["StochRSI"] = stochrsi
-except Exception as e:
-    st.error(f"Erro ao calcular indicadores: {e}")
-    st.stop()
+        if intervalo == "1m" and len(df) >= 100:
+            stoch_rsi = StochRSIIndicator(df["close"], window=14)
+            df["StochRSI"] = stoch_rsi.stochrsi()
 
-# Gráfico principal com velas e médias móveis
-fig = go.Figure()
-fig.add_trace(go.Candlestick(
-    x=df.index,
-    open=df["open"],
-    high=df["high"],
-    low=df["low"],
-    close=df["close"],
-    name="Candlestick",
-    increasing_line_color='green', decreasing_line_color='red'
-))
-fig.add_trace(go.Scatter(x=df.index, y=df["MA"], mode="lines", name="MA 20", line=dict(color="orange")))
-fig.add_trace(go.Scatter(x=df.index, y=df["EMA"], mode="lines", name="EMA 20", line=dict(color="blue")))
-fig.update_layout(title="Preço + Médias Móveis", xaxis_title="Data", yaxis_title="Preço (USDT)", height=600)
-st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.error(f"Erro ao calcular indicadores: {e}")
+        st.stop()
 
-# Gráfico de Volatilidade
-fig_vol = go.Figure()
-fig_vol.add_trace(go.Scatter(x=df.index, y=df["Volatility"], mode="lines", name="Volatilidade", line=dict(color="purple")))
-fig_vol.update_layout(title="Volatilidade (Desvio Padrão 20 períodos)", height=300)
-st.plotly_chart(fig_vol, use_container_width=True)
+    # Gráfico principal com velas e médias móveis
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df["open"],
+        high=df["high"],
+        low=df["low"],
+        close=df["close"],
+        name="Candlestick",
+        increasing_line_color='green', decreasing_line_color='red'
+    ))
+    fig.add_trace(go.Scatter(x=df.index, y=df["MA20"], mode="lines", name="MA 20", line=dict(color="orange")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], mode="lines", name="EMA 20", line=dict(color="blue")))
+    fig.update_layout(title="Preço + Médias Móveis", xaxis_title="Data", yaxis_title="Preço (USDT)", height=600)
+    st.plotly_chart(fig, use_container_width=True)
 
-# Gráfico RSI
-fig_rsi = go.Figure()
-fig_rsi.add_trace(go.Scatter(x=df.index, y=df["RSI"], mode="lines", name="RSI", line=dict(color="green")))
-fig_rsi.update_layout(title="RSI (14 períodos)", yaxis=dict(range=[0, 100]), height=300)
-st.plotly_chart(fig_rsi, use_container_width=True)
+    # Gráfico de Volatilidade
+    fig_vol = go.Figure()
+    fig_vol.add_trace(go.Scatter(x=df.index, y=df["Volatility"], mode="lines", name="Volatilidade", line=dict(color="purple")))
+    fig_vol.update_layout(title="Volatilidade (Desvio Padrão 20 períodos)", height=300)
+    st.plotly_chart(fig_vol, use_container_width=True)
 
-# Gráfico MACD
-fig_macd = go.Figure()
-fig_macd.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="MACD", line=dict(color="blue")))
-fig_macd.add_trace(go.Scatter(x=df.index, y=df["MACD_signal"], name="Signal", line=dict(color="red")))
-fig_macd.add_trace(go.Bar(x=df.index, y=df["MACD_hist"], name="Histograma", marker_color="gray"))
-fig_macd.update_layout(title="MACD", height=300)
-st.plotly_chart(fig_macd, use_container_width=True)
+    # Gráfico RSI
+    fig_rsi = go.Figure()
+    fig_rsi.add_trace(go.Scatter(x=df.index, y=df["RSI"], mode="lines", name="RSI", line=dict(color="green")))
+    fig_rsi.update_layout(title="RSI (14 períodos)", yaxis=dict(range=[0, 100]), height=300)
+    st.plotly_chart(fig_rsi, use_container_width=True)
 
-# Gráfico StochRSI (opcional)
-if "StochRSI" in df.columns:
-    fig_stoch = go.Figure()
-    fig_stoch.add_trace(go.Scatter(x=df.index, y=df["StochRSI"], mode="lines", name="StochRSI", line=dict(color="teal")))
-    fig_stoch.update_layout(title="Stochastic RSI", yaxis=dict(range=[0, 1]), height=300)
-    st.plotly_chart(fig_stoch, use_container_width=True)
+    # Gráfico MACD
+    fig_macd = go.Figure()
+    fig_macd.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="MACD", line=dict(color="blue")))
+    fig_macd.add_trace(go.Scatter(x=df.index, y=df["MACD_signal"], name="Signal", line=dict(color="red")))
+    fig_macd.add_trace(go.Bar(x=df.index, y=df["MACD_hist"], name="Histograma", marker_color="gray"))
+    fig_macd.update_layout(title="MACD", height=300)
+    st.plotly_chart(fig_macd, use_container_width=True)
 
-# Atualização automática se habilitada
-if atualizar:
-    st.caption(f"A cada {atualizar} segundos a análise é atualizada. Clique em 'Rerun' no topo ou recarregue a página.")
+    # Gráfico StochRSI (se existir)
+    if "StochRSI" in df.columns:
+        fig_stoch = go.Figure()
+        fig_stoch.add_trace(go.Scatter(x=df.index, y=df["StochRSI"], mode="lines", name="StochRSI", line=dict(color="teal")))
+        fig_stoch.update_layout(title="Stochastic RSI", yaxis=dict(range=[0, 1]), height=300)
+        st.plotly_chart(fig_stoch, use_container_width=True)
+
+    st.caption(f"A cada {atualizar} segundos a análise é atualizada. Recarregue a página para rodar novamente.")
