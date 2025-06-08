@@ -4,3 +4,4 @@ plotly
 numpy
 requests
 python-binance
+yfinance
