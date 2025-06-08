@@ -1,154 +1,247 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objs as go
+import plotly.graph_objects as go
 import requests
-import time
-import datetime
-from ta.momentum import RSIIndicator, StochasticOscillator
-from ta.trend import MACD, EMAIndicator, ADXIndicator
-from ta.volatility import BollingerBands
-import telegram
+from streamlit_autorefresh import st_autorefresh
+import yfinance as yf
 
-# Telegram bot setup
-telegram_token = st.secrets["7507470816:AAFpu1RRtGQYJfv1cuGjRsW4H87ryM1XsRY"]
-chat_id = st.secrets["1705586919"]
-bot = telegram.Bot(token=telegram_token)
+st.set_page_config(layout="wide")
+st.title("Analisador de Criptomoedas com Alertas e Indicadores Técnicos")
 
-def send_alert(message):
+# ---------------- INDICADORES ----------------
+
+def EMA(df, period=14):
+    return df['Close'].ewm(span=period, adjust=False).mean()
+
+def RSI(df, period=14):
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def StochRSI(df, period=14, smoothK=3, smoothD=3):
+    rsi = RSI(df, period)
+    min_rsi = rsi.rolling(window=period).min()
+    max_rsi = rsi.rolling(window=period).max()
+    stochrsi = (rsi - min_rsi) / (max_rsi - min_rsi)
+    K = stochrsi.rolling(window=smoothK).mean()
+    D = K.rolling(window=smoothD).mean()
+    return K, D
+
+def KDJ(df, period=9, k_period=3, d_period=3):
+    low_min = df['Low'].rolling(window=period).min()
+    high_max = df['High'].rolling(window=period).max()
+    rsv = (df['Close'] - low_min) / (high_max - low_min) * 100
+    K = rsv.ewm(com=k_period-1, adjust=False).mean()
+    D = K.ewm(com=d_period-1, adjust=False).mean()
+    J = 3 * K - 2 * D
+    return K, D, J
+
+def MACD(df, fast=12, slow=26, signal=9):
+    ema_fast = EMA(df, fast)
+    ema_slow = EMA(df, slow)
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    hist = macd_line - signal_line
+    return macd_line, signal_line, hist
+
+def Bollinger_Bands(df, period=20):
+    sma = df['Close'].rolling(window=period).mean()
+    std = df['Close'].rolling(window=period).std()
+    upper_band = sma + 2 * std
+    lower_band = sma - 2 * std
+    return sma, upper_band, lower_band
+
+def ADX(df, period=14):
+    high = df['High']
+    low = df['Low']
+    close = df['Close']
+    plus_dm = high.diff()
+    minus_dm = low.diff()
+    plus_dm[plus_dm < 0] = 0
+    minus_dm[minus_dm > 0] = 0
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(window=period).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1/period).mean() / atr)
+    minus_di = abs(100 * (minus_dm.ewm(alpha=1/period).mean() / atr))
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    adx = dx.ewm(alpha=1/period).mean()
+    return adx
+
+# ---------------- ALERTAS TELEGRAM ----------------
+
+def enviar_alerta_telegram(mensagem):
+    token = "7507470816:AAFpu1RRtGQYJfv1cuGjRsW4H87ryM1XsRY"
+    chat_id = "1705586919"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        bot.send_message(chat_id=chat_id, text=message)
+        requests.get(url, params={"chat_id": chat_id, "text": mensagem})
     except Exception as e:
-        st.error(f"Erro ao enviar alerta: {e}")
+        st.error(f"Erro ao enviar mensagem Telegram: {e}")
 
-# Função para pegar dados
-@st.cache_data(ttl=300)
-def get_klines(symbol, interval, limit=500):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    data = requests.get(url).json()
-    df = pd.DataFrame(data, columns=[
-        'timestamp', 'open', 'high', 'low', 'close', 'volume',
-        'close_time', 'quote_asset_volume', 'number_of_trades',
-        'taker_buy_base', 'taker_buy_quote', 'ignore'
-    ])
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    df.set_index('timestamp', inplace=True)
-    df = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+# ---------------- OBTÉM DADOS ----------------
+
+@st.cache_data(ttl=60)
+def obter_dados(symbol, period, interval):
+    df = yf.download(symbol, period=period, interval=interval)
+    df.dropna(inplace=True)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df['EMA_14'] = EMA(df)
+    df['RSI_14'] = RSI(df)
+    df['StochRSI_K'], df['StochRSI_D'] = StochRSI(df)
+    df['K'], df['D'], df['J'] = KDJ(df)
+    df['MACD'], df['MACD_Signal'], df['MACD_Hist'] = MACD(df)
+    df['SMA'], df['BB_Upper'], df['BB_Lower'] = Bollinger_Bands(df)
+    df['ADX'] = ADX(df)
     return df
 
-# Título
-st.title("Análise Técnica de Criptomoedas")
-st.markdown("Este sistema utiliza diversos indicadores técnicos para identificar possíveis oportunidades de **compra** ou **venda**. Os gráficos abaixo explicam o comportamento atual da criptomoeda selecionada.")
+# ---------------- GRÁFICOS ----------------
 
-symbol = st.sidebar.text_input("Símbolo da criptomoeda (ex: BTCUSDT)", value="BTCUSDT")
-interval = st.sidebar.selectbox("Intervalo do gráfico", ["1m", "5m", "15m", "1h", "4h", "1d"], index=3)
-data = get_klines(symbol, interval)
+def plot_candlestick(df, nome):
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"],
+        increasing_line_color='green', decreasing_line_color='red'
+    ))
+    fig.add_trace(go.Scatter(x=df.index, y=df["EMA_14"], name="EMA 14", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["BB_Upper"], name="Bollinger Upper", line=dict(color="purple", dash="dot")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["BB_Lower"], name="Bollinger Lower", line=dict(color="purple", dash="dot")))
+    fig.update_layout(title=f"{nome} - Preço + Indicadores", height=600)
+    return fig
 
-# Cálculo de indicadores
-rsi = RSIIndicator(close=data['close'], window=14).rsi()
-stoch = StochasticOscillator(high=data['high'], low=data['low'], close=data['close'], window=14, smooth_window=3)
-macd = MACD(close=data['close'])
-ema20 = EMAIndicator(close=data['close'], window=20).ema_indicator()
-ema50 = EMAIndicator(close=data['close'], window=50).ema_indicator()
-bb = BollingerBands(close=data['close'], window=20, window_dev=2)
-adx = ADXIndicator(high=data['high'], low=data['low'], close=data['close'], window=14).adx()
+def plot_rsi(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["RSI_14"], name="RSI", line=dict(color="green")))
+    fig.update_layout(title="RSI", yaxis=dict(range=[0, 100]), height=300)
+    return fig
 
-# KDJ
-low_min = data['low'].rolling(window=14).min()
-high_max = data['high'].rolling(window=14).max()
-rsv = 100 * (data['close'] - low_min) / (high_max - low_min)
-k = rsv.ewm(alpha=1/3).mean()
-d = k.ewm(alpha=1/3).mean()
-j = 3 * k - 2 * d
+def plot_stochrsi(df): 
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["StochRSI_K"], name="StochRSI K", line=dict(color="teal")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["StochRSI_D"], name="StochRSI D", line=dict(color="orange")))
+    fig.update_layout(title="Stochastic RSI", yaxis=dict(range=[0, 1]), height=300)
+    return fig
 
-# Bollinger bands
-upper_band = bb.bollinger_hband()
-lower_band = bb.bollinger_lband()
+def plot_kdj(df): 
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["K"], name="K", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["D"], name="D", line=dict(color="red")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["J"], name="J", line=dict(color="purple")))
+    fig.update_layout(title="Indicador KDJ", height=300)
+    return fig
 
-# Sinais baseados nos indicadores principais
-latest = -1
-rsi_val = rsi.iloc[latest]
-stoch_k = stoch.stoch().iloc[latest]
-macd_diff = macd.macd_diff().iloc[latest]
-macd_cross = "bullish" if macd.macd_diff().iloc[-2] < 0 and macd.macd_diff().iloc[-1] > 0 else "bearish" if macd.macd_diff().iloc[-2] > 0 and macd.macd_diff().iloc[-1] < 0 else "neutro"
-close_price = data['close'].iloc[latest]
-adx_val = adx.iloc[latest]
-k_val, d_val, j_val = k.iloc[latest], d.iloc[latest], j.iloc[latest]
+def plot_macd(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="MACD", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["MACD_Signal"], name="Signal", line=dict(color="orange")))
+    fig.add_trace(go.Bar(x=df.index, y=df["MACD_Hist"], name="Histograma", marker_color="gray"))
+    fig.update_layout(title="MACD", height=300)
+    return fig
 
-sinal = "neutro"
-if (rsi_val < 30 and stoch_k < 20 and j_val < 20 and macd_cross == "bullish" and close_price < lower_band.iloc[latest] and adx_val > 20):
-    sinal = "compra"
-elif (rsi_val > 70 and stoch_k > 80 and j_val > 80 and macd_cross == "bearish" and close_price > upper_band.iloc[latest] and adx_val > 20):
-    sinal = "venda"
+def plot_adx(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["ADX"], name="ADX", line=dict(color="red")))
+    fig.update_layout(title="ADX", height=300)
+    return fig
 
-st.subheader(f"Sinal gerado: {sinal.upper()}")
-if sinal != "neutro":
-    send_alert(f"ALERTA {sinal.upper()} detectado para {symbol} no intervalo {interval}!")
+# ---------------- APP ----------------
 
-# Histórico de sinais
-if "historico" not in st.session_state:
-    st.session_state.historico = []
-st.session_state.historico.append({
-    "data": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    "cripto": symbol,
-    "intervalo": interval,
-    "sinal": sinal
-})
-st.dataframe(pd.DataFrame(st.session_state.historico)[::-1], use_container_width=True)
+def main():
+    cripto_opcoes = {
+        "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Solana": "SOL-USD",
+        "Binance Coin": "BNB-USD", "Cardano": "ADA-USD", "Dogecoin": "DOGE-USD"
+    }
 
-# GRÁFICOS
-fig = go.Figure()
-fig.add_trace(go.Candlestick(x=data.index, open=data['open'], high=data['high'], low=data['low'], close=data['close'], name='Candles'))
-fig.add_trace(go.Scatter(x=data.index, y=ema20, mode='lines', name='EMA 20'))
-fig.add_trace(go.Scatter(x=data.index, y=ema50, mode='lines', name='EMA 50'))
-st.subheader("Gráfico Candlestick com Médias Móveis")
-st.markdown("Este gráfico mostra o comportamento de preços (candlestick) junto das médias móveis exponenciais de 20 e 50 períodos, úteis para identificar tendências.")
-st.plotly_chart(fig, use_container_width=True)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        nome_moeda = st.selectbox("Criptomoeda:", list(cripto_opcoes.keys()))
+    with col2:
+        period = st.selectbox("Período:", ["1mo", "3mo", "6mo", "1y"])
+    with col3:
+        interval = st.selectbox("Intervalo de velas:", ["15m", "30m", "1h", "1d"])
 
-fig_rsi = go.Figure()
-fig_rsi.add_trace(go.Scatter(x=data.index, y=rsi, name='RSI'))
-fig_rsi.add_hline(y=70, line=dict(color='red', dash='dash'))
-fig_rsi.add_hline(y=30, line=dict(color='green', dash='dash'))
-st.subheader("RSI - Índice de Força Relativa")
-st.markdown("RSI mede a velocidade e mudança dos movimentos de preço. Valores abaixo de 30 indicam sobrevenda (potencial compra); acima de 70 indicam sobrecompra (potencial venda).")
-st.plotly_chart(fig_rsi, use_container_width=True)
+    refresh_opcoes = {
+        "10 segundos": 10_000, "20 segundos": 20_000, "30 segundos": 30_000,
+        "1 minuto": 60_000, "3 minutos": 180_000, "5 minutos": 300_000
+    }
+    refresh_select = st.selectbox("Intervalo de atualização automática:", list(refresh_opcoes.keys()), index=3)
+    st_autorefresh(interval=refresh_opcoes[refresh_select], limit=None, key="refresh")
 
-fig_stoch = go.Figure()
-fig_stoch.add_trace(go.Scatter(x=data.index, y=stoch.stoch(), name='%K'))
-fig_stoch.add_trace(go.Scatter(x=data.index, y=stoch.stoch_signal(), name='%D'))
-st.subheader("Stochastic RSI")
-st.markdown("StochRSI é útil para identificar zonas de sobrecompra (>80) e sobrevenda (<20), além de cruzamentos entre %K e %D como sinais.")
-st.plotly_chart(fig_stoch, use_container_width=True)
+    symbol = cripto_opcoes[nome_moeda]
 
-fig_kdj = go.Figure()
-fig_kdj.add_trace(go.Scatter(x=data.index, y=k, name='K'))
-fig_kdj.add_trace(go.Scatter(x=data.index, y=d, name='D'))
-fig_kdj.add_trace(go.Scatter(x=data.index, y=j, name='J'))
-st.subheader("KDJ")
-st.markdown("KDJ é uma variação do estocástico, onde o J pode antecipar movimentos. Valores extremos (J > 80 ou J < 20) sugerem possíveis reversões.")
-st.plotly_chart(fig_kdj, use_container_width=True)
+    if "historico" not in st.session_state:
+        st.session_state.historico = []
+    if "ultimo_sinal" not in st.session_state:
+        st.session_state.ultimo_sinal = "neutro"
 
-fig_macd = go.Figure()
-fig_macd.add_trace(go.Scatter(x=data.index, y=macd.macd(), name='MACD'))
-fig_macd.add_trace(go.Scatter(x=data.index, y=macd.macd_signal(), name='Sinal'))
-fig_macd.add_trace(go.Bar(x=data.index, y=macd.macd_diff(), name='Histograma'))
-st.subheader("MACD")
-st.markdown("MACD mostra a relação entre duas EMAs. Cruzamentos entre a linha MACD e a linha de sinal indicam possíveis pontos de entrada ou saída.")
-st.plotly_chart(fig_macd, use_container_width=True)
+    df = obter_dados(symbol, period, interval)
+    if df.empty or len(df) < 2:
+        st.warning("Sem dados suficientes.")
+        return
 
-fig_bb = go.Figure()
-fig_bb.add_trace(go.Scatter(x=data.index, y=data['close'], name='Close'))
-fig_bb.add_trace(go.Scatter(x=data.index, y=upper_band, name='Upper Band'))
-fig_bb.add_trace(go.Scatter(x=data.index, y=lower_band, name='Lower Band'))
-st.subheader("Bollinger Bands")
-st.markdown("Bollinger Bands medem volatilidade. Quando o preço toca a banda inferior ou superior, pode indicar reversão. Bandas estreitas sugerem consolidação.")
-st.plotly_chart(fig_bb, use_container_width=True)
+    rsi = df.get('RSI_14', pd.Series()).iloc[-1]
+    stoch_k = df.get('StochRSI_K', pd.Series()).iloc[-1]
+    j = df.get('J', pd.Series()).iloc[-1]
 
-fig_adx = go.Figure()
-fig_adx.add_trace(go.Scatter(x=data.index, y=adx, name='ADX'))
-st.subheader("ADX - Índice de Direção Média")
-st.markdown("O ADX mede a força da tendência. Valores acima de 20-25 indicam tendência forte, abaixo disso indicam lateralização.")
-st.plotly_chart(fig_adx, use_container_width=True)
+    sinal = "neutro"
+    if pd.notna(rsi) and pd.notna(stoch_k) and pd.notna(j):
+        if rsi < 30 and stoch_k < 0.2 and j < 20:
+            sinal = "compra"
+        elif rsi > 70 and stoch_k > 0.8 and j > 80:
+            sinal = "venda"
 
-st.markdown("---")
-st.caption("Todos os sinais e gráficos são apenas educacionais. Faça sua própria análise antes de operar no mercado.")
+    if sinal != st.session_state.ultimo_sinal:
+        msg = f"{'🚀 COMPRA' if sinal == 'compra' else '⚠️ VENDA'} para {nome_moeda} (RSI={rsi:.2f}, StochRSI_K={stoch_k:.2f}, J={j:.2f})"
+        enviar_alerta_telegram(msg)
+        st.toast(msg)
+        st.session_state.ultimo_sinal = sinal
+    else:
+        st.info(f"Sinal atual: {sinal}.")
+
+    st.session_state.historico.append({
+        "timestamp": pd.Timestamp.now(), "moeda": nome_moeda,
+        "sinal": sinal, "RSI": round(rsi, 2),
+        "StochRSI_K": round(stoch_k, 2), "KDJ_J": round(j, 2)
+    })
+
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        st.plotly_chart(plot_candlestick(df, nome_moeda), use_container_width=True)
+        st.markdown("""**Candlestick + EMA + Bollinger Bands**  
+        Mostra a variação de preço com suporte da Média Móvel e Bandas Bollinger para detectar volatilidade e tendência.""")
+
+        st.plotly_chart(plot_rsi(df), use_container_width=True)
+        st.markdown("**RSI**: Mostra sobrecompra (>70) ou sobrevenda (<30).")
+
+        st.plotly_chart(plot_macd(df), use_container_width=True)
+        st.markdown("**MACD**: Cruzamento com a linha de sinal indica viradas de tendência.")
+    
+    with col_g2:
+        st.plotly_chart(plot_stochrsi(df), use_container_width=True)
+        st.markdown("**Stochastic RSI**: Complementa o RSI com precisão maior.")
+
+        st.plotly_chart(plot_kdj(df), use_container_width=True)
+        st.markdown("**KDJ**: Mostra cruzamentos e extremos com a linha J.")
+
+        st.plotly_chart(plot_adx(df), use_container_width=True)
+        st.markdown("**ADX**: Mede a força da tendência, valores acima de 25 = tendência forte.")
+
+    st.subheader("📊 Histórico de Sinais")
+    hist = pd.DataFrame(st.session_state.historico)
+    st.dataframe(hist.sort_values("timestamp", ascending=False).style.format({
+        "RSI": "{:.2f}", "StochRSI_K": "{:.2f}", "KDJ_J": "{:.2f}"
+    }), use_container_width=True)
+
+    st.caption(f"⏱ Atualização automática: {refresh_select}.")
+
+if __name__ == "__main__":
+    main()
