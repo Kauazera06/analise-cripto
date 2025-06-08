@@ -7,10 +7,8 @@ import time
 from datetime import datetime
 from binance.client import Client
 
-# ========== API CONFIG ==========
-API_KEY = ""
-API_SECRET = ""
-client = Client(API_KEY, API_SECRET)
+# ========== CONEXÃO BINANCE (sem autenticação) ==========
+client = Client()  # público, sem chave/segredo
 
 # ========== INDICADORES ==========
 def EMA(df, period=14):
@@ -55,20 +53,20 @@ def plot_candlestick(df):
         name='Candlestick'),
         go.Scatter(x=df.index, y=df['EMA_14'], line=dict(color='orange'), name='EMA 14')
     ])
-    fig.update_layout(title='Candlestick com EMA 14', height=500)
+    fig.update_layout(title='Candlestick com EMA 14', height=600)
     return fig
 
 def plot_rsi(df):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df.index, y=df['RSI_14'], name='RSI'))
-    fig.update_layout(title='RSI', height=400)
+    fig.update_layout(title='RSI', height=450)
     return fig
 
 def plot_stochrsi(df):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df.index, y=df['StochRSI_K'], name='%K'))
     fig.add_trace(go.Scatter(x=df.index, y=df['StochRSI_D'], name='%D'))
-    fig.update_layout(title='Stochastic RSI', height=400)
+    fig.update_layout(title='Stochastic RSI', height=450)
     return fig
 
 def plot_kdj(df):
@@ -76,10 +74,10 @@ def plot_kdj(df):
     fig.add_trace(go.Scatter(x=df.index, y=df['K'], name='K'))
     fig.add_trace(go.Scatter(x=df.index, y=df['D'], name='D'))
     fig.add_trace(go.Scatter(x=df.index, y=df['J'], name='J'))
-    fig.update_layout(title='KDJ', height=400)
+    fig.update_layout(title='KDJ', height=450)
     return fig
 
-# ========== TELEGRAM ALERTA ==========
+# ========== TELEGRAM ==========
 def enviar_alerta_telegram(mensagem):
     token = "7507470816:AAFpu1RRtGQYJfv1cuGjRsW4H87ryM1XsRY"
     chat_id = "1705586919"
@@ -109,10 +107,10 @@ def analisar(symbol, intervalo):
         df['K'], df['D'], df['J'] = KDJ(df)
         return df
     except Exception as e:
-        st.error(f"Erro na API da Binance: {e}")
+        st.error(f"Erro ao consultar dados da Binance: {e}")
         return pd.DataFrame()
 
-# ========== APP STREAMLIT ==========
+# ========== STREAMLIT ==========
 st.set_page_config(layout="wide")
 st.title("📊 Análise Automática de Criptomoedas com Alertas Telegram")
 
@@ -131,14 +129,14 @@ placeholder_historico = st.empty()
 while True:
     df = analisar(moeda, intervalo)
     if df.empty:
-        st.warning("Nenhum dado disponível. Verifique o símbolo ou tente novamente mais tarde.")
+        st.warning("Dados não disponíveis. Verifique o símbolo.")
         break
 
     ultimo_rsi = df['RSI_14'].iloc[-1]
     ultimo_k = df['StochRSI_K'].iloc[-1]
     ultimo_j = df['J'].iloc[-1]
 
-    # Define sinal de alerta
+    # Define sinal
     if ultimo_rsi < 30 and ultimo_k < 0.2 and ultimo_j < 20:
         sinal_atual = "compra"
     elif ultimo_rsi > 70 and ultimo_k > 0.8 and ultimo_j > 80:
@@ -146,35 +144,22 @@ while True:
     else:
         sinal_atual = "neutro"
 
-    # Atualiza gráficos
+    # Mostrar gráficos e descrição
     with placeholder_graficos.container():
         st.subheader(f"🔎 Análise da moeda: {moeda}")
-
         st.plotly_chart(plot_candlestick(df), use_container_width=True)
-        st.markdown("""
-        **Candlestick + EMA 14:**
-        Mostra os movimentos do preço e a média exponencial de 14 períodos para indicar tendências.
-        """)
+        st.markdown("**Candlestick + EMA 14:** Mostra variações de preço e tendência com média exponencial.")
 
         st.plotly_chart(plot_rsi(df), use_container_width=True)
-        st.markdown("""
-        **RSI:**
-        Mede a força e velocidade das variações de preço. Abaixo de 30 = possível compra, acima de 70 = possível venda.
-        """)
+        st.markdown("**RSI:** Mede força da movimentação de preço. RSI < 30 pode indicar compra, RSI > 70, venda.")
 
         st.plotly_chart(plot_stochrsi(df), use_container_width=True)
-        st.markdown("""
-        **Stochastic RSI:**
-        Mostra momentos de sobrecompra ou sobrevenda mais rapidamente. K e D ajudam a prever reversões.
-        """)
+        st.markdown("**Stochastic RSI:** Detecta sobrecompra/sobrevenda com maior sensibilidade. K e D ajudam a prever reversões.")
 
         st.plotly_chart(plot_kdj(df), use_container_width=True)
-        st.markdown("""
-        **KDJ:**
-        Combina o estocástico com a linha J para prever reversões de tendência com mais sensibilidade.
-        """)
+        st.markdown("**KDJ:** Indicador técnico baseado no estocástico com linha J extra para antecipar reversões.")
 
-    # Envia alerta e atualiza histórico
+    # Histórico e alerta
     horario = datetime.now().strftime("%H:%M:%S")
     if sinal_atual != st.session_state.ultimo_sinal:
         if sinal_atual == "compra":
