@@ -1,142 +1,167 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
-import numpy as np
-import requests
-import time
+import yfinance as yf
+from streamlit_autorefresh import st_autorefresh
+import plotly.graph_objs as go
 
-# ----------- FUNÇÕES DE INDICADORES -------------
+# --- Funções para indicadores técnicos ---
 
-def EMA(df, period=14):
-    return df['Close'].ewm(span=period, adjust=False).mean()
+def calcular_ema(df, periodo=14):
+    return df['Close'].ewm(span=periodo, adjust=False).mean()
 
-def RSI(df, period=14):
+def calcular_rsi(df, periodo=14):
     delta = df['Close'].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
-    rs = avg_gain / avg_loss
+    ganho = delta.where(delta > 0, 0)
+    perda = -delta.where(delta < 0, 0)
+    media_ganho = ganho.rolling(window=periodo).mean()
+    media_perda = perda.rolling(window=periodo).mean()
+    rs = media_ganho / media_perda
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def StochRSI(df, period=14, smoothK=3, smoothD=3):
-    rsi = RSI(df, period)
-    min_rsi = rsi.rolling(window=period).min()
-    max_rsi = rsi.rolling(window=period).max()
-    stochrsi = (rsi - min_rsi) / (max_rsi - min_rsi)
-    K = stochrsi.rolling(window=smoothK).mean()
-    D = K.rolling(window=smoothD).mean()
-    return K, D
+def calcular_macd(df, fast=12, slow=26, signal=9):
+    ema_fast = df['Close'].ewm(span=fast, adjust=False).mean()
+    ema_slow = df['Close'].ewm(span=slow, adjust=False).mean()
+    macd = ema_fast - ema_slow
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    hist = macd - signal_line
+    return macd, signal_line, hist
 
-def KDJ(df, period=9, k_period=3, d_period=3):
-    low_min = df['Low'].rolling(window=period).min()
-    high_max = df['High'].rolling(window=period).max()
-    rsv = (df['Close'] - low_min) / (high_max - low_min) * 100
-    K = rsv.ewm(com=k_period-1, adjust=False).mean()
-    D = K.ewm(com=d_period-1, adjust=False).mean()
-    J = 3 * K - 2 * D
-    return K, D, J
-
-# ----------- FUNÇÃO PARA ENVIAR ALERTA NO TELEGRAM -------------
-
-def enviar_alerta_telegram(mensagem):
-    token = "7507470816:AAFpu1RRtGQYJfv1cuGjRsW4H87ryM1XsRY"  # seu token
-    chat_id = "1705586919"  # seu chat_id para teste
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    params = {"chat_id": chat_id, "text": mensagem}
-    try:
-        requests.get(url, params=params)
-    except Exception as e:
-        st.error(f"Erro ao enviar mensagem Telegram: {e}")
-
-# ----------- FUNÇÃO DE ANÁLISE -------------
-
-def analisar(symbol, period, interval):
-    df = yf.download(symbol, period=period, interval=interval)
-    df.dropna(inplace=True)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    df['EMA_14'] = EMA(df)
-    df['RSI_14'] = RSI(df)
-    df['StochRSI_K'], df['StochRSI_D'] = StochRSI(df)
-    df['K'], df['D'], df['J'] = KDJ(df)
-
+# --- Função para baixar dados históricos da criptomoeda
+def baixar_dados(ticker, periodo="1d", intervalo="1m"):
+    df = yf.download(ticker, period=periodo, interval=intervalo)
+    df.reset_index(inplace=True)
     return df
 
-# ----------- MAIN DO APP -------------
+# --- Gráfico de velas com Plotly
+def grafico_velas(df):
+    fig = go.Figure(data=[go.Candlestick(
+        x=df['Datetime'],
+        open=df['Open'],
+        high=df['High'],
+        low=df['Low'],
+        close=df['Close'],
+        increasing_line_color='green',
+        decreasing_line_color='red',
+        name='Preço'
+    )])
+    fig.update_layout(
+        title='Gráfico de Velas',
+        xaxis_title='Data',
+        yaxis_title='Preço',
+        xaxis_rangeslider_visible=False,
+        template='plotly_dark',
+        height=500
+    )
+    return fig
 
-def main():
-    st.title("🚀 Alerta Cripto Completo - 24h Online")
+# --- Gráfico RSI
+def grafico_rsi(df, rsi):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df['Datetime'], y=rsi,
+        mode='lines',
+        line=dict(color='purple', width=2),
+        name='RSI'
+    ))
+    fig.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Sobrecomprado (70)")
+    fig.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Sobrevendido (30)")
+    fig.update_layout(
+        title='RSI (Índice de Força Relativa)',
+        xaxis_title='Data',
+        yaxis_title='RSI',
+        yaxis=dict(range=[0, 100]),
+        template='plotly_dark',
+        height=300
+    )
+    return fig
 
-    # Lista de criptomoedas (você pode adicionar outras)
-    opcoes_cripto = {
-        "Bitcoin": "BTC-USD",
-        "Ethereum": "ETH-USD",
-        "Binance Coin": "BNB-USD",
-        "Cardano": "ADA-USD",
-        "Solana": "SOL-USD",
-        "Ripple": "XRP-USD",
-        "Polkadot": "DOT-USD",
-        "Litecoin": "LTC-USD",
-        "Syrup": "SYRUP-USD",
-        "Dogecoin": "DOGE-USD",
-        "Pepe": "PEPE-USD"
-    }
+# --- Gráfico MACD
+def grafico_macd(df, macd, signal, hist):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df['Datetime'], y=macd,
+        mode='lines',
+        line=dict(color='blue', width=2),
+        name='MACD'
+    ))
+    fig.add_trace(go.Scatter(
+        x=df['Datetime'], y=signal,
+        mode='lines',
+        line=dict(color='orange', width=2),
+        name='Linha de Sinal'
+    ))
+    fig.add_trace(go.Bar(
+        x=df['Datetime'], y=hist,
+        name='Histograma',
+        marker_color=['green' if val >= 0 else 'red' for val in hist]
+    ))
+    fig.update_layout(
+        title='MACD',
+        xaxis_title='Data',
+        yaxis_title='Valor',
+        template='plotly_dark',
+        height=300
+    )
+    return fig
 
-    symbol_nome = st.selectbox("Escolha a criptomoeda:", list(opcoes_cripto.keys()))
-    symbol = opcoes_cripto[symbol_nome]
+# --- Gráfico EMA e preço
+def grafico_ema(df, ema):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df['Datetime'], y=df['Close'],
+        mode='lines',
+        name='Preço Fechamento',
+        line=dict(color='lightblue', width=2)
+    ))
+    fig.add_trace(go.Scatter(
+        x=df['Datetime'], y=ema,
+        mode='lines',
+        name='EMA 14',
+        line=dict(color='yellow', width=2, dash='dash')
+    ))
+    fig.update_layout(
+        title='Preço Fechamento e EMA 14',
+        xaxis_title='Data',
+        yaxis_title='Preço',
+        template='plotly_dark',
+        height=300
+    )
+    return fig
 
-    period = st.selectbox("Período para baixar dados:", ["1mo", "3mo", "6mo", "1y"])
-    interval = st.selectbox("Intervalo dos candles:", ["15m", "30m", "1h", "1d"])
+# --- Streamlit App ---
 
-    intervalo_analise = st.number_input("Intervalo entre análises automáticas (minutos)", min_value=1, max_value=60, value=5)
+st.set_page_config(page_title="Análise Cripto com Indicadores", layout="wide")
+st.title("Análise de Criptomoedas com Indicadores Técnicos e Atualização Automática")
 
-    if 'ultimo_sinal' not in st.session_state:
-        st.session_state.ultimo_sinal = "neutro"
+# Atualiza a cada 60 segundos
+st_autorefresh(interval=60 * 1000, key="auto_refresh")
 
-    if st.button("▶️ Iniciar análise automática (fica rodando 24h)"):
-        st.write(f"Iniciando análises automáticas para {symbol_nome} a cada {intervalo_analise} minutos...")
+ticker = st.text_input("Digite o ticker da criptomoeda (ex: BTC-USD):", value="BTC-USD")
 
-        while True:
-            df = analisar(symbol, period, interval)
+if ticker:
+    try:
+        with st.spinner("Baixando dados..."):
+            df = baixar_dados(ticker, periodo="1d", intervalo="1m")
 
-            ultimo_rsi = df['RSI_14'].iloc[-1]
-            ultimo_stoch_k = df['StochRSI_K'].iloc[-1]
-            ultimo_j = df['J'].iloc[-1]
+        if df.empty:
+            st.error("Nenhum dado encontrado para esse ticker.")
+        else:
+            df.rename(columns={'Datetime': 'Datetime'}, inplace=True)
 
-            # Mostrar gráficos no Streamlit
-            st.line_chart(df[['Close', 'EMA_14']])
-            st.line_chart(df[['RSI_14']])
-            st.line_chart(df[['StochRSI_K', 'StochRSI_D']])
-            st.line_chart(df[['K', 'D', 'J']])
+            # Calcula indicadores
+            ema14 = calcular_ema(df, periodo=14)
+            rsi14 = calcular_rsi(df, periodo=14)
+            macd_line, signal_line, macd_hist = calcular_macd(df)
 
-            # Definir sinal
-            if ultimo_rsi < 30 and ultimo_stoch_k < 0.2 and ultimo_j < 20:
-                sinal_atual = "compra"
-            elif ultimo_rsi > 70 and ultimo_stoch_k > 0.8 and ultimo_j > 80:
-                sinal_atual = "venda"
-            else:
-                sinal_atual = "neutro"
+            # Mostra dados e gráficos
+            st.subheader(f"Últimas 10 linhas dos dados de {ticker}")
+            st.dataframe(df.tail(10))
 
-            if sinal_atual != st.session_state.ultimo_sinal:
-                if sinal_atual == "compra":
-                    mensagem = f"🚀 Sinal de COMPRA detectado para {symbol_nome} (RSI {ultimo_rsi:.2f}, StochRSI K {ultimo_stoch_k:.2f}, KDJ J {ultimo_j:.2f})"
-                    enviar_alerta_telegram(mensagem)
-                    st.success(mensagem)
-                elif sinal_atual == "venda":
-                    mensagem = f"⚠️ Sinal de VENDA detectado para {symbol_nome} (RSI {ultimo_rsi:.2f}, StochRSI K {ultimo_stoch_k:.2f}, KDJ J {ultimo_j:.2f})"
-                    enviar_alerta_telegram(mensagem)
-                    st.warning(mensagem)
-                else:
-                    st.info("Nenhum sinal forte detectado no momento.")
-                st.session_state.ultimo_sinal = sinal_atual
-            else:
-                st.info(f"Sinal atual continua: {sinal_atual}. Sem novo alerta.")
+            st.plotly_chart(grafico_velas(df), use_container_width=True)
+            st.plotly_chart(grafico_ema(df, ema14), use_container_width=True)
+            st.plotly_chart(grafico_rsi(df, rsi14), use_container_width=True)
+            st.plotly_chart(grafico_macd(df, macd_line, signal_line, macd_hist), use_container_width=True)
 
-            st.write(f"Próxima análise em {intervalo_analise} minutos...")
-            time.sleep(intervalo_analise * 60)
-
-if __name__ == "__main__":
-    main()
+    except Exception as e:
+        st.error(f"Erro ao baixar ou processar dados: {e}")
