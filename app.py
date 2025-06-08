@@ -73,6 +73,8 @@ def ADX(df, period=14):
     minus_di = abs(100 * (minus_dm.ewm(alpha=1/period).mean() / atr))
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
     adx = dx.ewm(alpha=1/period).mean()
+    df['+DI'] = plus_di
+    df['-DI'] = minus_di
     return adx
 
 # ---------------- ALERTAS TELEGRAM ----------------
@@ -103,55 +105,43 @@ def obter_dados(symbol, period, interval):
     df['ADX'] = ADX(df)
     return df
 
-# ---------------- GRÁFICOS ----------------
+# ---------------- SINAL DE ALERTA ----------------
 
-def plot_candlestick(df, nome):
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(
-        x=df.index, open=df["Open"], high=df["High"],
-        low=df["Low"], close=df["Close"],
-        increasing_line_color='green', decreasing_line_color='red'
-    ))
-    fig.add_trace(go.Scatter(x=df.index, y=df["EMA_14"], name="EMA 14", line=dict(color="blue")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["BB_Upper"], name="Bollinger Upper", line=dict(color="purple", dash="dot")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["BB_Lower"], name="Bollinger Lower", line=dict(color="purple", dash="dot")))
-    fig.update_layout(title=f"{nome} - Preço + Indicadores", height=600)
-    return fig
+def gerar_sinal(df):
+    rsi = df['RSI_14'].iloc[-1]
+    stoch_k = df['StochRSI_K'].iloc[-1]
+    stoch_d = df['StochRSI_D'].iloc[-1]
+    k = df['K'].iloc[-1]
+    d = df['D'].iloc[-1]
+    j = df['J'].iloc[-1]
+    macd = df['MACD'].iloc[-1]
+    macd_signal = df['MACD_Signal'].iloc[-1]
+    adx = df['ADX'].iloc[-1]
+    plus_di = df['+DI'].iloc[-1]
+    minus_di = df['-DI'].iloc[-1]
 
-def plot_rsi(df):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df["RSI_14"], name="RSI", line=dict(color="green")))
-    fig.update_layout(title="RSI", yaxis=dict(range=[0, 100]), height=300)
-    return fig
+    rsi_signal = 'buy' if rsi < 30 else 'sell' if rsi > 70 else ''
+    stoch_signal = 'buy' if stoch_k < 0.2 and stoch_d < 0.2 else 'sell' if stoch_k > 0.8 and stoch_d > 0.8 else ''
+    kdj_signal = 'buy' if j < 20 and k < 20 and d < 20 else 'sell' if j > 80 and k > 80 and d > 80 else ''
+    macd_cross = 'buy' if macd > macd_signal else 'sell' if macd < macd_signal else ''
+    adx_signal = 'buy' if adx > 20 and plus_di > minus_di else 'sell' if adx > 20 and plus_di < minus_di else ''
 
-def plot_stochrsi(df): 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df["StochRSI_K"], name="StochRSI K", line=dict(color="teal")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["StochRSI_D"], name="StochRSI D", line=dict(color="orange")))
-    fig.update_layout(title="Stochastic RSI", yaxis=dict(range=[0, 1]), height=300)
-    return fig
+    sinais = {
+        "RSI": rsi_signal,
+        "StochRSI": stoch_signal,
+        "KDJ": kdj_signal,
+        "MACD": macd_cross,
+        "ADX": adx_signal
+    }
 
-def plot_kdj(df): 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df["K"], name="K", line=dict(color="blue")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["D"], name="D", line=dict(color="red")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["J"], name="J", line=dict(color="purple")))
-    fig.update_layout(title="Indicador KDJ", height=300)
-    return fig
+    if all(v == 'buy' for v in sinais.values()):
+        final = 'compra'
+    elif all(v == 'sell' for v in sinais.values()):
+        final = 'venda'
+    else:
+        final = 'neutro'
 
-def plot_macd(df):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="MACD", line=dict(color="blue")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["MACD_Signal"], name="Signal", line=dict(color="orange")))
-    fig.add_trace(go.Bar(x=df.index, y=df["MACD_Hist"], name="Histograma", marker_color="gray"))
-    fig.update_layout(title="MACD", height=300)
-    return fig
-
-def plot_adx(df):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df["ADX"], name="ADX", line=dict(color="red")))
-    fig.update_layout(title="ADX", height=300)
-    return fig
+    return final, sinais
 
 # ---------------- APP ----------------
 
@@ -188,29 +178,20 @@ def main():
         st.warning("Sem dados suficientes.")
         return
 
-    rsi = df.get('RSI_14', pd.Series()).iloc[-1]
-    stoch_k = df.get('StochRSI_K', pd.Series()).iloc[-1]
-    j = df.get('J', pd.Series()).iloc[-1]
-
-    sinal = "neutro"
-    if pd.notna(rsi) and pd.notna(stoch_k) and pd.notna(j):
-        if rsi < 30 and stoch_k < 0.2 and j < 20:
-            sinal = "compra"
-        elif rsi > 70 and stoch_k > 0.8 and j > 80:
-            sinal = "venda"
+    sinal, sinais = gerar_sinal(df)
 
     if sinal != st.session_state.ultimo_sinal:
-        msg = f"{'🚀 COMPRA' if sinal == 'compra' else '⚠️ VENDA'} para {nome_moeda} (RSI={rsi:.2f}, StochRSI_K={stoch_k:.2f}, J={j:.2f})"
-        enviar_alerta_telegram(msg)
-        st.toast(msg)
+        mensagem = f"{'🚀 COMPRA' if sinal == 'compra' else '⚠️ VENDA'} para {nome_moeda} com sinais:\n" + \
+                   "\n".join([f"{k}: {v}" for k, v in sinais.items()])
+        enviar_alerta_telegram(mensagem)
+        st.toast(mensagem)
         st.session_state.ultimo_sinal = sinal
     else:
         st.info(f"Sinal atual: {sinal}.")
 
     st.session_state.historico.append({
         "timestamp": pd.Timestamp.now(), "moeda": nome_moeda,
-        "sinal": sinal, "RSI": round(rsi, 2),
-        "StochRSI_K": round(stoch_k, 2), "KDJ_J": round(j, 2)
+        "sinal": sinal, **{k: v for k, v in sinais.items()}
     })
 
     # Gráficos em ordem vertical e explicações detalhadas
