@@ -156,6 +156,7 @@ def plot_adx(df):
 # ---------------- APP ----------------
 
 def main():
+   def main():
     cripto_opcoes = {
         "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Solana": "SOL-USD",
         "Binance Coin": "BNB-USD", "Cardano": "ADA-USD", "Dogecoin": "DOGE-USD"
@@ -213,27 +214,68 @@ def main():
         "StochRSI_K": round(stoch_k, 2), "KDJ_J": round(j, 2)
     })
 
-    col_g1, col_g2 = st.columns(2)
-    with col_g1:
-        st.plotly_chart(plot_candlestick(df, nome_moeda), use_container_width=True)
-        st.markdown("""**Candlestick + EMA + Bollinger Bands**  
-        Mostra a variação de preço com suporte da Média Móvel e Bandas Bollinger para detectar volatilidade e tendência.""")
+    # Gráficos em ordem vertical e explicações detalhadas
 
-        st.plotly_chart(plot_rsi(df), use_container_width=True)
-        st.markdown("**RSI**: Mostra sobrecompra (>70) ou sobrevenda (<30).")
+    st.plotly_chart(plot_candlestick(df, nome_moeda), use_container_width=True)
+    st.markdown("""
+### 📈 Candlestick com EMA e Bollinger Bands  
+Mostra a ação do preço com:
+- **Candlestick**: visual das velas (abertura, máxima, mínima, fechamento).
+- **EMA (Exponential Moving Average)**: suaviza a tendência de preço.  
+  - Cruzamento de EMA com o preço pode indicar **entrada ou saída**.
+- **Bollinger Bands**: faixa de volatilidade.
+  - Quando o preço toca a banda inferior → **potencial compra**.
+  - Quando toca a banda superior → **potencial venda**.
+    """)
 
-        st.plotly_chart(plot_macd(df), use_container_width=True)
-        st.markdown("**MACD**: Cruzamento com a linha de sinal indica viradas de tendência.")
-    
-    with col_g2:
-        st.plotly_chart(plot_stochrsi(df), use_container_width=True)
-        st.markdown("**Stochastic RSI**: Complementa o RSI com precisão maior.")
+    st.plotly_chart(plot_rsi(df), use_container_width=True)
+    st.markdown("""
+### 💹 RSI (Índice de Força Relativa)  
+Mede a velocidade das variações de preço:
+- **Referência**:
+  - RSI < 30 → **Sobrevendido** → possível oportunidade de **compra**.
+  - RSI > 70 → **Sobrecomprado** → possível sinal de **venda**.
+- Cruzamentos nesses níveis sugerem reversões de tendência.
+    """)
 
-        st.plotly_chart(plot_kdj(df), use_container_width=True)
-        st.markdown("**KDJ**: Mostra cruzamentos e extremos com a linha J.")
+    st.plotly_chart(plot_stochrsi(df), use_container_width=True)
+    st.markdown("""
+### 📊 Stochastic RSI  
+Indica áreas extremas com maior sensibilidade que o RSI:
+- **Referência**:
+  - K e D < 0.2 → **zona de sobrevenda** → possível **compra**.
+  - K e D > 0.8 → **zona de sobrecompra** → possível **venda**.
+- Cruzamentos entre K e D também sinalizam reversões.
+    """)
 
-        st.plotly_chart(plot_adx(df), use_container_width=True)
-        st.markdown("**ADX**: Mede a força da tendência, valores acima de 25 = tendência forte.")
+    st.plotly_chart(plot_kdj(df), use_container_width=True)
+    st.markdown("""
+### 🔀 Indicador KDJ  
+Variação do estocástico com linha **J**, que amplifica movimentos:
+- **Referência**:
+  - J < 20 → **compra**.
+  - J > 80 → **venda**.
+- Cruzamentos entre K, D e J ajudam a antecipar movimentos.
+    """)
+
+    st.plotly_chart(plot_macd(df), use_container_width=True)
+    st.markdown("""
+### 📉 MACD (Moving Average Convergence Divergence)  
+Mede divergência entre duas EMAs:
+- **MACD vs Signal**:
+  - MACD cruza **acima** da Signal → **compra**.
+  - MACD cruza **abaixo** da Signal → **venda**.
+- O histograma mostra a força do momento (quanto maior, mais forte o movimento).
+    """)
+
+    st.plotly_chart(plot_adx(df), use_container_width=True)
+    st.markdown("""
+### ⚡ ADX (Average Directional Index)  
+Mede a **força** da tendência, não a direção:
+- ADX > 25 → tendência forte (pode ser de alta ou baixa).
+- ADX < 20 → mercado sem direção clara (**lateral**).
+Use em conjunto com outros indicadores para entender o **contexto da tendência**.
+    """)
 
     st.subheader("📊 Histórico de Sinais")
     hist = pd.DataFrame(st.session_state.historico)
@@ -242,6 +284,7 @@ def main():
     }), use_container_width=True)
 
     st.caption(f"⏱ Atualização automática: {refresh_select}.")
+
 
 if __name__ == "__main__":
     main()
