@@ -75,7 +75,7 @@ def ADX(df, period=14):
     adx = dx.ewm(alpha=1/period).mean()
     return adx
 
-# ---------------- TELEGRAM ALERTAS ----------------
+# ---------------- ALERTA ----------------
 
 def enviar_alerta_telegram(mensagem):
     token = "7507470816:AAFpu1RRtGQYJfv1cuGjRsW4H87ryM1XsRY"
@@ -86,7 +86,7 @@ def enviar_alerta_telegram(mensagem):
     except Exception as e:
         st.error(f"Erro ao enviar mensagem Telegram: {e}")
 
-# ---------------- OBTÉM DADOS ----------------
+# ---------------- DADOS ----------------
 
 @st.cache_data(ttl=60)
 def obter_dados(symbol, period, interval):
@@ -103,52 +103,6 @@ def obter_dados(symbol, period, interval):
     df['ADX'] = ADX(df)
     return df
 
-# ---------------- GRÁFICOS ----------------
-
-def plot_candlestick(df, nome):
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(
-        x=df.index, open=df["Open"], high=df["High"],
-        low=df["Low"], close=df["Close"],
-        increasing_line_color='green', decreasing_line_color='red'
-    ))
-    fig.add_trace(go.Scatter(x=df.index, y=df["EMA_14"], name="EMA 14", line=dict(color="blue")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["BB_Upper"], name="Bollinger Upper", line=dict(color="purple", dash="dot")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["BB_Lower"], name="Bollinger Lower", line=dict(color="purple", dash="dot")))
-    fig.update_layout(title=f"{nome} - Preço + Indicadores", height=600)
-    return fig
-
-def plot_rsi(df): return go.Figure().add_trace(go.Scatter(x=df.index, y=df["RSI_14"], name="RSI", line=dict(color="green"))).update_layout(title="RSI", yaxis=dict(range=[0, 100]), height=300)
-
-def plot_stochrsi(df): 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df["StochRSI_K"], name="StochRSI K", line=dict(color="teal")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["StochRSI_D"], name="StochRSI D", line=dict(color="orange")))
-    fig.update_layout(title="Stochastic RSI", yaxis=dict(range=[0, 1]), height=300)
-    return fig
-
-def plot_kdj(df): 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df["K"], name="K", line=dict(color="blue")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["D"], name="D", line=dict(color="red")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["J"], name="J", line=dict(color="purple")))
-    fig.update_layout(title="Indicador KDJ", height=300)
-    return fig
-
-def plot_macd(df):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="MACD", line=dict(color="blue")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["MACD_Signal"], name="Signal", line=dict(color="orange")))
-    fig.add_trace(go.Bar(x=df.index, y=df["MACD_Hist"], name="Histograma", marker_color="gray"))
-    fig.update_layout(title="MACD", height=300)
-    return fig
-
-def plot_adx(df):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df["ADX"], name="ADX", line=dict(color="red")))
-    fig.update_layout(title="ADX", height=300)
-    return fig
-
 # ---------------- APP ----------------
 
 def main():
@@ -156,7 +110,6 @@ def main():
         "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Solana": "SOL-USD",
         "Binance Coin": "BNB-USD", "Cardano": "ADA-USD", "Dogecoin": "DOGE-USD"
     }
-
     col1, col2, col3 = st.columns(3)
     with col1:
         nome_moeda = st.selectbox("Criptomoeda:", list(cripto_opcoes.keys()))
@@ -187,16 +140,20 @@ def main():
     rsi = df['RSI_14'].iloc[-1]
     stoch_k = df['StochRSI_K'].iloc[-1]
     j = df['J'].iloc[-1]
+    macd = df['MACD'].iloc[-1]
+    macd_signal = df['MACD_Signal'].iloc[-1]
+    adx = df['ADX'].iloc[-1]
 
-    if rsi < 30 and stoch_k < 0.2 and j < 20:
+    # Ajuste de critério com base em TODOS os indicadores
+    if (rsi < 30 and stoch_k < 0.2 and j < 20 and macd > macd_signal and adx > 25):
         sinal = "compra"
-    elif rsi > 70 and stoch_k > 0.8 and j > 80:
+    elif (rsi > 70 and stoch_k > 0.8 and j > 80 and macd < macd_signal and adx > 25):
         sinal = "venda"
     else:
         sinal = "neutro"
 
     if sinal != st.session_state.ultimo_sinal:
-        msg = f"{'🚀 COMPRA' if sinal == 'compra' else '⚠️ VENDA'} para {nome_moeda} (RSI={rsi:.2f}, StochRSI_K={stoch_k:.2f}, J={j:.2f})"
+        msg = f"{'🚀 COMPRA' if sinal == 'compra' else '⚠️ VENDA'} para {nome_moeda}\nRSI={rsi:.2f}, StochRSI_K={stoch_k:.2f}, J={j:.2f}, MACD vs Signal={macd:.2f} vs {macd_signal:.2f}, ADX={adx:.2f}"
         enviar_alerta_telegram(msg)
         st.toast(msg)
         st.session_state.ultimo_sinal = sinal
@@ -205,39 +162,78 @@ def main():
 
     st.session_state.historico.append({
         "timestamp": pd.Timestamp.now(), "moeda": nome_moeda,
-        "sinal": sinal, "RSI": round(rsi, 2),
-        "StochRSI_K": round(stoch_k, 2), "KDJ_J": round(j, 2)
+        "sinal": sinal, "RSI": round(rsi, 2), "StochRSI_K": round(stoch_k, 2),
+        "KDJ_J": round(j, 2), "MACD": round(macd, 2), "Signal": round(macd_signal, 2), "ADX": round(adx, 2)
     })
 
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.plotly_chart(plot_candlestick(df, nome_moeda), use_container_width=True)
-        st.markdown("""**Candlestick + EMA + Bollinger Bands**  
-        Mostra a variação de preço com suporte da Média Móvel e Bandas Bollinger para detectar volatilidade e tendência.""")
-
+        st.markdown("**Candlestick + EMA + Bollinger Bands**: Preço, tendências e volatilidade.")
         st.plotly_chart(plot_rsi(df), use_container_width=True)
-        st.markdown("**RSI**: Mostra sobrecompra (>70) ou sobrevenda (<30).")
-
+        st.markdown("**RSI**: Sobrecompra (>70) e sobrevenda (<30).")
         st.plotly_chart(plot_macd(df), use_container_width=True)
-        st.markdown("**MACD**: Cruzamento com a linha de sinal indica viradas de tendência.")
-    
+        st.markdown("**MACD**: Cruzamentos sinalizam reversões.")
     with col_g2:
         st.plotly_chart(plot_stochrsi(df), use_container_width=True)
-        st.markdown("**Stochastic RSI**: Complementa o RSI com precisão maior.")
-
+        st.markdown("**Stochastic RSI**: Refina o RSI para detectar melhor os extremos.")
         st.plotly_chart(plot_kdj(df), use_container_width=True)
-        st.markdown("**KDJ**: Mostra cruzamentos e extremos com a linha J.")
-
+        st.markdown("**KDJ**: Baseado em momentum, destaca cruzamentos rápidos da linha J.")
         st.plotly_chart(plot_adx(df), use_container_width=True)
-        st.markdown("**ADX**: Mede a força da tendência, valores acima de 25 = tendência forte.")
+        st.markdown("**ADX**: Mede a força da tendência (forte > 25).")
 
     st.subheader("📊 Histórico de Sinais")
     hist = pd.DataFrame(st.session_state.historico)
     st.dataframe(hist.sort_values("timestamp", ascending=False).style.format({
-        "RSI": "{:.2f}", "StochRSI_K": "{:.2f}", "KDJ_J": "{:.2f}"
+        "RSI": "{:.2f}", "StochRSI_K": "{:.2f}", "KDJ_J": "{:.2f}", "MACD": "{:.2f}", "Signal": "{:.2f}", "ADX": "{:.2f}"
     }), use_container_width=True)
 
     st.caption(f"⏱ Atualização automática: {refresh_select}.")
+
+def plot_candlestick(df, nome):
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+                                 increasing_line_color='green', decreasing_line_color='red'))
+    fig.add_trace(go.Scatter(x=df.index, y=df["EMA_14"], name="EMA 14", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["BB_Upper"], name="Bollinger Upper", line=dict(color="purple", dash="dot")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["BB_Lower"], name="Bollinger Lower", line=dict(color="purple", dash="dot")))
+    fig.update_layout(title=f"{nome} - Preço + Indicadores", height=600)
+    return fig
+
+def plot_rsi(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["RSI_14"], name="RSI", line=dict(color="green")))
+    fig.update_layout(title="RSI", yaxis=dict(range=[0, 100]), height=300)
+    return fig
+
+def plot_stochrsi(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["StochRSI_K"], name="StochRSI K", line=dict(color="teal")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["StochRSI_D"], name="StochRSI D", line=dict(color="orange")))
+    fig.update_layout(title="Stochastic RSI", yaxis=dict(range=[0, 1]), height=300)
+    return fig
+
+def plot_kdj(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["K"], name="K", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["D"], name="D", line=dict(color="red")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["J"], name="J", line=dict(color="purple")))
+    fig.update_layout(title="Indicador KDJ", height=300)
+    return fig
+
+def plot_macd(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="MACD", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["MACD_Signal"], name="Signal", line=dict(color="orange")))
+    fig.add_trace(go.Bar(x=df.index, y=df["MACD_Hist"], name="Histograma", marker_color="gray"))
+    fig.update_layout(title="MACD", height=300)
+    return fig
+
+def plot_adx(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["ADX"], name="ADX", line=dict(color="red")))
+    fig.update_layout(title="ADX", height=300)
+    return fig
 
 if __name__ == "__main__":
     main()
