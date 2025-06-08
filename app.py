@@ -41,6 +41,47 @@ def KDJ(df, period=9, k_period=3, d_period=3):
     J = 3 * K - 2 * D
     return K, D, J
 
+def MACD(df, fast=12, slow=26, signal=9):
+    exp1 = df['Close'].ewm(span=fast, adjust=False).mean()
+    exp2 = df['Close'].ewm(span=slow, adjust=False).mean()
+    macd = exp1 - exp2
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    hist = macd - signal_line
+    return macd, signal_line, hist
+
+def BollingerBands(df, period=20, std_dev=2):
+    sma = df['Close'].rolling(window=period).mean()
+    std = df['Close'].rolling(window=period).std()
+    upper = sma + std_dev * std
+    lower = sma - std_dev * std
+    return sma, upper, lower
+
+def ADX(df, period=14):
+    high = df['High']
+    low = df['Low']
+    close = df['Close']
+
+    plus_dm = high.diff()
+    minus_dm = low.diff().abs()
+
+    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0)
+    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0)
+
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    atr = tr.rolling(window=period).mean()
+
+    plus_di = 100 * (plus_dm.rolling(window=period).sum() / atr)
+    minus_di = 100 * (minus_dm.rolling(window=period).sum() / atr)
+
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    adx = dx.rolling(window=period).mean()
+
+    return adx
+
 # ----------- TELEGRAM -------------
 
 def enviar_alerta_telegram(mensagem):
@@ -64,6 +105,9 @@ def obter_dados(symbol, period, interval):
     df['RSI_14'] = RSI(df)
     df['StochRSI_K'], df['StochRSI_D'] = StochRSI(df)
     df['K'], df['D'], df['J'] = KDJ(df)
+    df['MACD'], df['MACD_signal'], df['MACD_hist'] = MACD(df)
+    df['BB_MA'], df['BB_upper'], df['BB_lower'] = BollingerBands(df)
+    df['ADX_14'] = ADX(df)
     return df
 
 # ----------- GRÁFICOS -------------
@@ -73,10 +117,19 @@ def plot_candlestick(df, nome):
     fig.add_trace(go.Candlestick(
         x=df.index, open=df["Open"], high=df["High"],
         low=df["Low"], close=df["Close"],
-        increasing_line_color='green', decreasing_line_color='red'
+        increasing_line_color='green', decreasing_line_color='red',
+        name="Preço"
     ))
     fig.add_trace(go.Scatter(x=df.index, y=df["EMA_14"], mode="lines", name="EMA 14", line=dict(color="blue")))
-    fig.update_layout(title=f"{nome} - Preço + EMA 14", xaxis_title="Data", yaxis_title="Preço (USD)", height=600)
+    fig.add_trace(go.Scatter(x=df.index, y=df["BB_upper"], mode="lines", name="Bollinger Sup", line=dict(color="orange", dash="dash")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["BB_lower"], mode="lines", name="Bollinger Inf", line=dict(color="orange", dash="dash")))
+    fig.add_trace(go.Bar(x=df.index, y=df["Volume"], name="Volume", marker_color='grey', opacity=0.3, yaxis="y2"))
+    fig.update_layout(
+        title=f"{nome} - Candlestick + Indicadores",
+        xaxis_title="Data", yaxis_title="Preço (USD)", height=600,
+        xaxis_rangeslider_visible=False,
+        yaxis2=dict(overlaying="y", side="right", showgrid=False, position=0.15, title="Volume")
+    )
     return fig
 
 def plot_rsi(df, nome):
@@ -100,11 +153,23 @@ def plot_kdj(df, nome):
     fig.update_layout(title=f"{nome} - Indicador KDJ", height=300)
     return fig
 
+def plot_macd(df, nome):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], mode="lines", name="MACD", line=dict(color="blue")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["MACD_signal"], mode="lines", name="Signal", line=dict(color="orange")))
+    fig.add_trace(go.Bar(x=df.index, y=df["MACD_hist"], name="Histograma", marker_color="grey"))
+    fig.update_layout(title=f"{nome} - MACD", height=300)
+    return fig
+
+def plot_adx(df, nome):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["ADX_14"], mode="lines", name="ADX", line=dict(color="purple")))
+    fig.update_layout(title=f"{nome} - ADX (14 períodos)", yaxis=dict(range=[0, 100]), height=300)
+    return fig
+
 # ----------- APP PRINCIPAL -------------
 
 def main():
-
-    # Opções de intervalo para atualização automática (em milissegundos)
     interval_options = {
         "10 segundos": 10 * 1000,
         "20 segundos": 20 * 1000,
@@ -113,7 +178,6 @@ def main():
         "3 minutos": 3 * 60 * 1000,
         "5 minutos": 5 * 60 * 1000
     }
-
     cripto_opcoes = {
         "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Binance Coin": "BNB-USD",
         "Cardano": "ADA-USD", "Solana": "SOL-USD", "Ripple": "XRP-USD",
@@ -129,100 +193,19 @@ def main():
     with col3:
         interval = st.selectbox("Intervalo:", ["15m", "30m", "1h", "1d"], index=0)
 
-    # Selectbox para escolher intervalo de atualização automática
-    intervalo_selecao = st.selectbox("Intervalo entre análises automáticas", list(interval_options.keys()), index=3)
-    intervalo_ms = interval_options[intervalo_selecao]
+    intervalo_str = st.selectbox("Intervalo entre análises automáticas:", list(interval_options.keys()), index=3)
+    intervalo = interval_options[intervalo_str]
 
-    # Aplica o auto refresh
-    st_autorefresh(interval=intervalo_ms, limit=None, key="auto_refresh")
+    st_autorefresh(interval=intervalo, limit=None, key="analise_crypto")
 
     symbol = cripto_opcoes[nome_moeda]
-
-    if "historico" not in st.session_state:
-        st.session_state["historico"] = []
-    if "ultimo_sinal" not in st.session_state:
-        st.session_state.ultimo_sinal = "neutro"
-
     df = obter_dados(symbol, period, interval)
-    if df.empty:
-        st.warning("Nenhum dado disponível.")
-        st.stop()
 
-    rsi = df['RSI_14'].iloc[-1]
-    stoch_k = df['StochRSI_K'].iloc[-1]
-    j = df['J'].iloc[-1]
+    st.plotly_chart(plot_candlestick(df, nome_moeda), use_container_width=True)
+    st.plotly_chart(plot_rsi(df, nome_moeda), use_container_width=True)
+    st.plotly_chart(plot_stochrsi(df, nome_moeda), use_container_width=True)
+    st.plotly_chart(plot_kdj(df, nome_moeda), use_container_width=True)
+    st.plotly_chart(plot_macd(df, nome_moeda), use_container_width=True)
+    st.plotly_chart(plot_adx(df, nome_moeda), use_container_width=True)
 
-    if rsi < 30 and stoch_k < 0.2 and j < 20:
-        sinal = "compra"
-    elif rsi > 70 and stoch_k > 0.8 and j > 80:
-        sinal = "venda"
-    else:
-        sinal = "neutro"
-
-    if sinal != st.session_state.ultimo_sinal:
-        if sinal == "compra":
-            msg = f"🚀 COMPRA para {nome_moeda} (RSI {rsi:.2f}, StochRSI K {stoch_k:.2f}, KDJ J {j:.2f})"
-            enviar_alerta_telegram(msg)
-            st.success(msg)
-        elif sinal == "venda":
-            msg = f"⚠️ VENDA para {nome_moeda} (RSI {rsi:.2f}, StochRSI K {stoch_k:.2f}, KDJ J {j:.2f})"
-            enviar_alerta_telegram(msg)
-            st.warning(msg)
-        st.session_state.ultimo_sinal = sinal
-    else:
-        st.info(f"Sinal atual: {sinal}. Sem nova mudança.")
-
-    # Adiciona ao histórico com nome da moeda
-    st.session_state.historico.append({
-        "timestamp": pd.Timestamp.now(),
-        "moeda": nome_moeda,
-        "sinal": sinal,
-        "RSI": round(rsi, 2),
-        "StochRSI_K": round(stoch_k, 2),
-        "KDJ_J": round(j, 2)
-    })
-
-    # Gráficos com descrições
-    col_g1, col_g2 = st.columns(2)
-    with col_g1:
-        st.plotly_chart(plot_candlestick(df, nome_moeda), use_container_width=True)
-        st.markdown("""
-        **Gráfico de Candlestick + EMA 14**  
-        Mostra o preço da criptomoeda com velas japonesas, que representam abertura, fechamento, máxima e mínima em cada período.  
-        A linha EMA 14 (Média Móvel Exponencial) ajuda a identificar tendências:  
-        - Se o preço estiver acima da EMA, tendência de alta.  
-        - Se estiver abaixo, tendência de baixa.  
-        Observe cruzamentos para sinais de compra ou venda.
-        """)
-
-        st.plotly_chart(plot_rsi(df, nome_moeda), use_container_width=True)
-        st.markdown("""
-        **RSI (Índice de Força Relativa)**  
-        Indica se a moeda está sobrecomprada (>70) ou sobrevendida (<30).  
-        Valores extremos podem indicar possível reversão.
-        """)
-
-    with col_g2:
-        st.plotly_chart(plot_stochrsi(df, nome_moeda), use_container_width=True)
-        st.markdown("""
-        **Stochastic RSI**  
-        Mede o quão próximo o RSI está das suas extremidades (0 a 1).  
-        - Valores abaixo de 0.2 indicam sobrevenda.  
-        - Valores acima de 0.8 indicam sobrecompra.
-        """)
-
-        st.plotly_chart(plot_kdj(df, nome_moeda), use_container_width=True)
-        st.markdown("""
-        **Indicador KDJ**  
-        Combina o estocástico com médias móveis exponenciais para mostrar o momento e possíveis pontos de reversão.  
-        - Cruzamentos das linhas K e D indicam sinais de compra/venda.  
-        - Linha J acentua esses sinais.
-        """)
-
-    # Exibe histórico dos sinais
-    if st.checkbox("Mostrar histórico de sinais"):
-        df_hist = pd.DataFrame(st.session_state.historico)
-        st.dataframe(df_hist.sort_values(by="timestamp", ascending=False))
-
-if __name__ == "__main__":
-    main()
+main()
