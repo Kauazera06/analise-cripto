@@ -4,147 +4,211 @@ import numpy as np
 import plotly.graph_objects as go
 import requests
 import time
-import ta
 from streamlit_autorefresh import st_autorefresh
+import yfinance as yf
 
 st.set_page_config(layout="wide")
-st.title("Analisador de Criptomoedas com Indicadores Técnicos")
+st.title("Analisador de Criptomoedas com Alertas e Indicadores Técnicos")
 
-# Controle de atualização automática a cada X segundos
-col1, col2, col3 = st.columns(3)
-with col1:
-    simbolo = st.text_input("Símbolo da Criptomoeda", value="BTCUSDT")
-with col2:
-    intervalo = st.selectbox("Intervalo do Gráfico", ["1m", "5m", "15m", "1h", "4h", "1d"], index=0)
-with col3:
-    atualizar = st.number_input("Atualizar a cada X segundos", min_value=10, max_value=3600, value=60, step=10)
+# ----------- FUNÇÕES DE INDICADORES -------------
 
-# Implementa auto refresh
-count = st_autorefresh(interval=atualizar * 1000, limit=None, key="auto_refresh")
+def EMA(df, period=14):
+    return df['Close'].ewm(span=period, adjust=False).mean()
 
-# Função para obter dados da Binance
-@st.cache_data(ttl=60)
-def obter_dados(symbol, interval, limit=500):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+def RSI(df, period=14):
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def StochRSI(df, period=14, smoothK=3, smoothD=3):
+    rsi = RSI(df, period)
+    min_rsi = rsi.rolling(window=period).min()
+    max_rsi = rsi.rolling(window=period).max()
+    stochrsi = (rsi - min_rsi) / (max_rsi - min_rsi)
+    K = stochrsi.rolling(window=smoothK).mean()
+    D = K.rolling(window=smoothD).mean()
+    return K, D
+
+def KDJ(df, period=9, k_period=3, d_period=3):
+    low_min = df['Low'].rolling(window=period).min()
+    high_max = df['High'].rolling(window=period).max()
+    rsv = (df['Close'] - low_min) / (high_max - low_min) * 100
+    K = rsv.ewm(com=k_period-1, adjust=False).mean()
+    D = K.ewm(com=d_period-1, adjust=False).mean()
+    J = 3 * K - 2 * D
+    return K, D, J
+
+# ----------- FUNÇÃO PARA ENVIAR ALERTA NO TELEGRAM -------------
+
+def enviar_alerta_telegram(mensagem):
+    token = "7507470816:AAFpu1RRtGQYJfv1cuGjRsW4H87ryM1XsRY"  # seu token
+    chat_id = "1705586919"  # seu chat_id para teste
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    params = {"chat_id": chat_id, "text": mensagem}
     try:
-        resposta = requests.get(url)
-        dados = resposta.json()
-        if isinstance(dados, dict) and dados.get("code"):
-            st.error(f"Erro na API da Binance: {dados.get('msg', 'Erro desconhecido')}")
-            return pd.DataFrame()
-        df = pd.DataFrame(dados, columns=[
-            "timestamp", "open", "high", "low", "close", "volume",
-            "close_time", "quote_asset_volume", "number_of_trades",
-            "taker_buy_base_volume", "taker_buy_quote_volume", "ignore"
-        ])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df.set_index("timestamp", inplace=True)
-        df = df[["open", "high", "low", "close", "volume"]].astype(float)
-        return df
+        requests.get(url, params=params)
     except Exception as e:
-        st.error(f"Erro ao baixar ou processar dados: {e}")
-        return pd.DataFrame()
+        st.error(f"Erro ao enviar mensagem Telegram: {e}")
 
-df = obter_dados(simbolo.upper(), intervalo)
+# ----------- FUNÇÃO PARA OBTER DADOS E CALCULAR INDICADORES -------------
 
-if df.empty:
-    st.warning("Nenhum dado disponível. Verifique o símbolo ou tente novamente mais tarde.")
-    st.stop()
+@st.cache_data(ttl=60)
+def obter_dados(symbol, period, interval):
+    df = yf.download(symbol, period=period, interval=interval)
+    df.dropna(inplace=True)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
 
-# Calcular indicadores técnicos
-try:
-    df["MA"] = df["close"].rolling(window=20).mean()
-    df["EMA"] = df["close"].ewm(span=20, adjust=False).mean()
-    df["Volatility"] = df["close"].rolling(window=20).std()
-    df["RSI"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
+    df['EMA_14'] = EMA(df)
+    df['RSI_14'] = RSI(df)
+    df['StochRSI_K'], df['StochRSI_D'] = StochRSI(df)
+    df['K'], df['D'], df['J'] = KDJ(df)
 
-    macd_indicator = ta.trend.MACD(df["close"])
-    df["MACD"] = macd_indicator.macd()
-    df["MACD_signal"] = macd_indicator.macd_signal()
-    df["MACD_hist"] = macd_indicator.macd_diff()
+    return df
 
-    if intervalo == "1m" and len(df) >= 300:
-        stochrsi = ta.momentum.StochRSIIndicator(df["close"], window=14)
-        df["StochRSI"] = stochrsi.stochrsi()
-except Exception as e:
-    st.error(f"Erro ao calcular indicadores: {e}")
-    st.stop()
+# ----------- FUNÇÕES DE PLOTAGEM -------------
 
-# Usar session_state para guardar o histórico das análises
-if "historico" not in st.session_state:
-    st.session_state["historico"] = []
-
-# Montar o gráfico principal
 def plot_candlestick(df):
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
         x=df.index,
-        open=df["open"],
-        high=df["high"],
-        low=df["low"],
-        close=df["close"],
+        open=df["Open"],
+        high=df["High"],
+        low=df["Low"],
+        close=df["Close"],
         name="Candlestick",
         increasing_line_color='green', decreasing_line_color='red'
     ))
-    fig.add_trace(go.Scatter(x=df.index, y=df["MA"], mode="lines", name="MA 20", line=dict(color="orange")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["EMA"], mode="lines", name="EMA 20", line=dict(color="blue")))
-    fig.update_layout(title="Preço + Médias Móveis", xaxis_title="Data", yaxis_title="Preço (USDT)", height=600)
+    fig.add_trace(go.Scatter(x=df.index, y=df["EMA_14"], mode="lines", name="EMA 14", line=dict(color="blue")))
+    fig.update_layout(title="Preço + EMA 14", xaxis_title="Data", yaxis_title="Preço (USD)", height=600)
     return fig
-
-def plot_volatility(df):
-    fig_vol = go.Figure()
-    fig_vol.add_trace(go.Scatter(x=df.index, y=df["Volatility"], mode="lines", name="Volatilidade", line=dict(color="purple")))
-    fig_vol.update_layout(title="Volatilidade (Desvio Padrão 20 períodos)", height=300)
-    return fig_vol
 
 def plot_rsi(df):
     fig_rsi = go.Figure()
-    fig_rsi.add_trace(go.Scatter(x=df.index, y=df["RSI"], mode="lines", name="RSI", line=dict(color="green")))
+    fig_rsi.add_trace(go.Scatter(x=df.index, y=df["RSI_14"], mode="lines", name="RSI", line=dict(color="green")))
     fig_rsi.update_layout(title="RSI (14 períodos)", yaxis=dict(range=[0, 100]), height=300)
     return fig_rsi
 
-def plot_macd(df):
-    fig_macd = go.Figure()
-    fig_macd.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="MACD", line=dict(color="blue")))
-    fig_macd.add_trace(go.Scatter(x=df.index, y=df["MACD_signal"], name="Signal", line=dict(color="red")))
-    fig_macd.add_trace(go.Bar(x=df.index, y=df["MACD_hist"], name="Histograma", marker_color="gray"))
-    fig_macd.update_layout(title="MACD", height=300)
-    return fig_macd
-
 def plot_stochrsi(df):
     fig_stoch = go.Figure()
-    fig_stoch.add_trace(go.Scatter(x=df.index, y=df["StochRSI"], mode="lines", name="StochRSI", line=dict(color="teal")))
+    fig_stoch.add_trace(go.Scatter(x=df.index, y=df["StochRSI_K"], mode="lines", name="StochRSI K", line=dict(color="teal")))
+    fig_stoch.add_trace(go.Scatter(x=df.index, y=df["StochRSI_D"], mode="lines", name="StochRSI D", line=dict(color="orange")))
     fig_stoch.update_layout(title="Stochastic RSI", yaxis=dict(range=[0, 1]), height=300)
     return fig_stoch
 
-# Gerar gráficos
-fig = plot_candlestick(df)
-fig_vol = plot_volatility(df)
-fig_rsi = plot_rsi(df)
-fig_macd = plot_macd(df)
-fig_stoch = plot_stochrsi(df) if "StochRSI" in df.columns else None
+def plot_kdj(df):
+    fig_kdj = go.Figure()
+    fig_kdj.add_trace(go.Scatter(x=df.index, y=df["K"], mode="lines", name="K", line=dict(color="blue")))
+    fig_kdj.add_trace(go.Scatter(x=df.index, y=df["D"], mode="lines", name="D", line=dict(color="red")))
+    fig_kdj.add_trace(go.Scatter(x=df.index, y=df["J"], mode="lines", name="J", line=dict(color="purple")))
+    fig_kdj.update_layout(title="KDJ", height=300)
+    return fig_kdj
 
-# Guardar as análises atuais no histórico para mostrar tudo na tela
-st.session_state["historico"].append({
-    "timestamp": df.index[-1],
-    "simbolo": simbolo.upper(),
-    "intervalo": intervalo,
-    "fig": fig,
-    "fig_vol": fig_vol,
-    "fig_rsi": fig_rsi,
-    "fig_macd": fig_macd,
-    "fig_stoch": fig_stoch
-})
+# ----------- MAIN DO APP -------------
 
-# Mostrar histórico com os gráficos, um abaixo do outro
-for i, entry in enumerate(reversed(st.session_state["historico"][-10:])):  # Últimas 10 análises
-    st.markdown(f"### Análise #{len(st.session_state['historico']) - i} - {entry['simbolo']} ({entry['intervalo']}) às {entry['timestamp']}")
-    st.plotly_chart(entry["fig"], use_container_width=True)
-    st.plotly_chart(entry["fig_vol"], use_container_width=True)
-    st.plotly_chart(entry["fig_rsi"], use_container_width=True)
-    st.plotly_chart(entry["fig_macd"], use_container_width=True)
-    if entry["fig_stoch"]:
-        st.plotly_chart(entry["fig_stoch"], use_container_width=True)
+def main():
+    # Controles
+    opcoes_cripto = {
+        "Bitcoin": "BTC-USD",
+        "Ethereum": "ETH-USD",
+        "Binance Coin": "BNB-USD",
+        "Cardano": "ADA-USD",
+        "Solana": "SOL-USD",
+        "Ripple": "XRP-USD",
+        "Polkadot": "DOT-USD",
+        "Litecoin": "LTC-USD",
+        "Syrup": "SYRUP-USD",
+        "Dogecoin": "DOGE-USD",
+        "Pepe": "PEPE-USD"
+    }
 
-st.caption(f"A análise é atualizada automaticamente a cada {atualizar} segundos.")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        symbol_nome = st.selectbox("Escolha a criptomoeda:", list(opcoes_cripto.keys()))
+    with col2:
+        period = st.selectbox("Período para baixar dados:", ["1mo", "3mo", "6mo", "1y"], index=0)
+    with col3:
+        interval = st.selectbox("Intervalo dos candles:", ["15m", "30m", "1h", "1d"], index=0)
 
+    intervalo_analise = st.number_input("Intervalo entre análises automáticas (minutos)", min_value=1, max_value=60, value=5)
+
+    symbol = opcoes_cripto[symbol_nome]
+
+    # Atualização automática a cada X segundos
+    count = st_autorefresh(interval=intervalo_analise * 60 * 1000, limit=None, key="auto_refresh")
+
+    # Inicializa sessão para guardar histórico e último sinal
+    if "historico" not in st.session_state:
+        st.session_state["historico"] = []
+
+    if "ultimo_sinal" not in st.session_state:
+        st.session_state.ultimo_sinal = "neutro"
+
+    # Obter dados e indicadores
+    df = obter_dados(symbol, period, interval)
+
+    if df.empty:
+        st.warning("Nenhum dado disponível. Verifique o símbolo ou tente novamente mais tarde.")
+        st.stop()
+
+    # Pegar valores últimos para análise de sinais
+    ultimo_rsi = df['RSI_14'].iloc[-1]
+    ultimo_stoch_k = df['StochRSI_K'].iloc[-1]
+    ultimo_j = df['J'].iloc[-1]
+
+    # Definir sinal
+    if ultimo_rsi < 30 and ultimo_stoch_k < 0.2 and ultimo_j < 20:
+        sinal_atual = "compra"
+    elif ultimo_rsi > 70 and ultimo_stoch_k > 0.8 and ultimo_j > 80:
+        sinal_atual = "venda"
+    else:
+        sinal_atual = "neutro"
+
+    # Enviar alerta se mudou o sinal
+    if sinal_atual != st.session_state.ultimo_sinal:
+        if sinal_atual == "compra":
+            mensagem = f"🚀 Sinal de COMPRA detectado para {symbol_nome} (RSI {ultimo_rsi:.2f}, StochRSI K {ultimo_stoch_k:.2f}, KDJ J {ultimo_j:.2f})"
+            enviar_alerta_telegram(mensagem)
+            st.success(mensagem)
+        elif sinal_atual == "venda":
+            mensagem = f"⚠️ Sinal de VENDA detectado para {symbol_nome} (RSI {ultimo_rsi:.2f}, StochRSI K {ultimo_stoch_k:.2f}, KDJ J {ultimo_j:.2f})"
+            enviar_alerta_telegram(mensagem)
+            st.warning(mensagem)
+        else:
+            st.info("Nenhum sinal forte detectado no momento.")
+        st.session_state.ultimo_sinal = sinal_atual
+    else:
+        st.info(f"Sinal atual continua: {sinal_atual}. Sem novo alerta.")
+
+    # Guardar no histórico (para exibir tabela)
+    st.session_state.historico.append({
+        "timestamp": pd.Timestamp.now(),
+        "sinal": sinal_atual,
+        "RSI": round(ultimo_rsi, 2),
+        "StochRSI_K": round(ultimo_stoch_k, 2),
+        "KDJ_J": round(ultimo_j, 2)
+    })
+
+    # Mostrar gráficos lado a lado
+    col_graf1, col_graf2 = st.columns(2)
+    with col_graf1:
+        st.plotly_chart(plot_candlestick(df), use_container_width=True)
+        st.plotly_chart(plot_rsi(df), use_container_width=True)
+    with col_graf2:
+        st.plotly_chart(plot_stochrsi(df), use_container_width=True)
+        st.plotly_chart(plot_kdj(df), use_container_width=True)
+
+    # Mostrar histórico dos sinais
+    st.subheader("Histórico dos últimos sinais")
+    df_historico = pd.DataFrame(st.session_state.historico)
+    st.dataframe(df_historico.sort_values(by="timestamp", ascending=False).reset_index(drop=True))
+
+    st.write(f"Próxima análise automática em aproximadamente {intervalo_analise} minutos.")
+
+if __name__ == "__main__":
+    main()
