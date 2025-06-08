@@ -6,8 +6,7 @@ import requests
 import time
 import plotly.graph_objs as go
 
-# ----------- FUNÇÕES DE INDICADORES -------------
-
+# --- Funções de indicadores (mantive igual) ---
 def EMA(df, period=14):
     return df['Close'].ewm(span=period, adjust=False).mean()
 
@@ -39,8 +38,7 @@ def KDJ(df, period=9, k_period=3, d_period=3):
     J = 3 * K - 2 * D
     return K, D, J
 
-# ----------- FUNÇÕES DE GRÁFICOS -------------
-
+# --- Gráficos ---
 def plot_candlestick(df):
     fig = go.Figure(data=[go.Candlestick(
         x=df.index,
@@ -81,11 +79,10 @@ def plot_kdj(df):
     fig.update_layout(title="KDJ", height=300, margin=dict(l=10,r=10,t=40,b=10), yaxis=dict(range=[0,100]))
     return fig
 
-# ----------- FUNÇÃO PARA ENVIAR ALERTA NO TELEGRAM -------------
-
+# --- Enviar alerta Telegram ---
 def enviar_alerta_telegram(mensagem):
     token = "7507470816:AAFpu1RRtGQYJfv1cuGjRsW4H87ryM1XsRY"  # seu token
-    chat_id = "1705586919"  # seu chat_id para teste
+    chat_id = "1705586919"  # seu chat_id
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     params = {"chat_id": chat_id, "text": mensagem}
     try:
@@ -93,27 +90,22 @@ def enviar_alerta_telegram(mensagem):
     except Exception as e:
         st.error(f"Erro ao enviar mensagem Telegram: {e}")
 
-# ----------- FUNÇÃO DE ANÁLISE -------------
-
+# --- Função análise ---
 def analisar(symbol, period, interval):
     df = yf.download(symbol, period=period, interval=interval)
     df.dropna(inplace=True)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-
     df['EMA_14'] = EMA(df)
     df['RSI_14'] = RSI(df)
     df['StochRSI_K'], df['StochRSI_D'] = StochRSI(df)
     df['K'], df['D'], df['J'] = KDJ(df)
-
     return df
 
-# ----------- MAIN DO APP -------------
-
+# --- Main ---
 def main():
-    st.title("🚀 Alerta Cripto Completo - 24h Online")
+    st.title("🚀 Alerta Cripto Completo - Atualização Automática")
 
-    # Lista de criptomoedas (você pode adicionar outras)
     opcoes_cripto = {
         "Bitcoin": "BTC-USD",
         "Ethereum": "ETH-USD",
@@ -133,7 +125,6 @@ def main():
 
     period = st.selectbox("Período para baixar dados:", ["1mo", "3mo", "6mo", "1y"])
     interval = st.selectbox("Intervalo dos candles:", ["15m", "30m", "1h", "1d"])
-
     intervalo_analise = st.number_input("Intervalo entre análises automáticas (minutos)", min_value=1, max_value=60, value=5)
 
     if 'ultimo_sinal' not in st.session_state:
@@ -141,86 +132,92 @@ def main():
     if 'historico' not in st.session_state:
         st.session_state.historico = []
 
-    if st.button("▶️ Iniciar análise automática (fica rodando 24h)"):
-        st.write(f"Iniciando análises automáticas para {symbol_nome} a cada {intervalo_analise} minutos...")
+    # Reservas de espaço para atualizar gráficos e histórico
+    placeholder_graficos = st.empty()
+    placeholder_historico = st.empty()
+    placeholder_status = st.empty()
 
-        while True:
-            df = analisar(symbol, period, interval)
+    while True:
+        df = analisar(symbol, period, interval)
 
-            ultimo_rsi = df['RSI_14'].iloc[-1]
-            ultimo_stoch_k = df['StochRSI_K'].iloc[-1]
-            ultimo_j = df['J'].iloc[-1]
+        ultimo_rsi = df['RSI_14'].iloc[-1]
+        ultimo_stoch_k = df['StochRSI_K'].iloc[-1]
+        ultimo_j = df['J'].iloc[-1]
 
-            col_graf1, col_graf2 = st.columns(2)
-            with col_graf1:
+        # Atualizar gráficos na mesma área
+        with placeholder_graficos.container():
+            col1, col2 = st.columns(2)
+            with col1:
                 st.plotly_chart(plot_candlestick(df), use_container_width=True)
                 st.markdown("""
                 **Candlestick + EMA 14:**  
                 Candlesticks mostram a movimentação diária do preço (abertura, fechamento, máximo e mínimo).  
-                A EMA 14 (Média Móvel Exponencial de 14 períodos) ajuda a suavizar o preço e indicar tendências.
+                A EMA 14 ajuda a suavizar o preço e indicar tendências.
                 """)
                 st.plotly_chart(plot_rsi(df), use_container_width=True)
                 st.markdown("""
-                **RSI (Índice de Força Relativa):**  
-                Mede a velocidade e a mudança dos movimentos de preço.  
-                Valores abaixo de 30 indicam sobrevenda (possível compra), acima de 70 indicam sobrecompra (possível venda).
+                **RSI:**  
+                Mede velocidade e mudança dos movimentos de preço.  
+                Valores abaixo de 30 indicam sobrevenda (compra), acima de 70 sobrecompra (venda).
                 """)
 
-            with col_graf2:
+            with col2:
                 st.plotly_chart(plot_stochrsi(df), use_container_width=True)
                 st.markdown("""
-                **Stochastic RSI:**  
-                Indicador baseado no RSI que ajuda a identificar condições de sobrecompra ou sobrevenda mais rapidamente,  
-                através das linhas K e D que se cruzam indicando potenciais pontos de entrada ou saída.
+                **StochRSI:**  
+                Indicador que ajuda a identificar sobrecompra e sobrevenda mais rápido,  
+                linhas K e D indicam potenciais pontos de entrada e saída.
                 """)
                 st.plotly_chart(plot_kdj(df), use_container_width=True)
                 st.markdown("""
                 **KDJ:**  
-                Derivado do estocástico, o KDJ é usado para identificar pontos de reversão,  
-                com as linhas K, D e J mostrando o momentum e força da tendência atual.
+                Usado para identificar reversões com as linhas K, D e J mostrando momentum e força da tendência.
                 """)
 
-            # Definir sinal
-            if ultimo_rsi < 30 and ultimo_stoch_k < 0.2 and ultimo_j < 20:
-                sinal_atual = "compra"
-            elif ultimo_rsi > 70 and ultimo_stoch_k > 0.8 and ultimo_j > 80:
-                sinal_atual = "venda"
-            else:
-                sinal_atual = "neutro"
+        # Definir sinal
+        if ultimo_rsi < 30 and ultimo_stoch_k < 0.2 and ultimo_j < 20:
+            sinal_atual = "compra"
+        elif ultimo_rsi > 70 and ultimo_stoch_k > 0.8 and ultimo_j > 80:
+            sinal_atual = "venda"
+        else:
+            sinal_atual = "neutro"
 
-            # Atualizar histórico com nome da moeda
-            st.session_state.historico.append({
-                "timestamp": pd.Timestamp.now(),
-                "moeda": symbol_nome,
-                "sinal": sinal_atual,
-                "RSI": round(ultimo_rsi, 2),
-                "StochRSI_K": round(ultimo_stoch_k, 2),
-                "KDJ_J": round(ultimo_j, 2)
-            })
+        # Atualizar histórico com nome da moeda, sem duplicar
+        st.session_state.historico.append({
+            "timestamp": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "moeda": symbol_nome,
+            "sinal": sinal_atual,
+            "RSI": round(ultimo_rsi, 2),
+            "StochRSI_K": round(ultimo_stoch_k, 2),
+            "KDJ_J": round(ultimo_j, 2)
+        })
 
+        # Exibir histórico atualizado no placeholder
+        with placeholder_historico.container():
+            st.subheader("Histórico dos últimos sinais")
+            df_historico = pd.DataFrame(st.session_state.historico)
+            st.dataframe(df_historico.sort_values(by="timestamp", ascending=False).reset_index(drop=True))
+
+        # Mensagens de alerta e status atual
+        with placeholder_status.container():
             if sinal_atual != st.session_state.ultimo_sinal:
                 if sinal_atual == "compra":
-                    mensagem = f"🚀 Sinal de COMPRA detectado para {symbol_nome} (RSI {ultimo_rsi:.2f}, StochRSI K {ultimo_stoch_k:.2f}, KDJ J {ultimo_j:.2f})"
+                    mensagem = f"🚀 Sinal de COMPRA para {symbol_nome} (RSI {ultimo_rsi:.2f}, StochRSI K {ultimo_stoch_k:.2f}, KDJ J {ultimo_j:.2f})"
                     enviar_alerta_telegram(mensagem)
                     st.success(mensagem)
                 elif sinal_atual == "venda":
-                    mensagem = f"⚠️ Sinal de VENDA detectado para {symbol_nome} (RSI {ultimo_rsi:.2f}, StochRSI K {ultimo_stoch_k:.2f}, KDJ J {ultimo_j:.2f})"
+                    mensagem = f"⚠️ Sinal de VENDA para {symbol_nome} (RSI {ultimo_rsi:.2f}, StochRSI K {ultimo_stoch_k:.2f}, KDJ J {ultimo_j:.2f})"
                     enviar_alerta_telegram(mensagem)
                     st.warning(mensagem)
                 else:
-                    st.info("Nenhum sinal forte detectado no momento.")
+                    st.info("Nenhum sinal forte detectado.")
                 st.session_state.ultimo_sinal = sinal_atual
             else:
                 st.info(f"Sinal atual continua: {sinal_atual}. Sem novo alerta.")
 
             st.write(f"Próxima análise em {intervalo_analise} minutos...")
 
-            # Mostrar histórico na tela
-            st.subheader("Histórico dos últimos sinais")
-            df_historico = pd.DataFrame(st.session_state.historico)
-            st.dataframe(df_historico.sort_values(by="timestamp", ascending=False).reset_index(drop=True))
-
-            time.sleep(intervalo_analise * 60)
+        time.sleep(intervalo_analise * 60)
 
 if __name__ == "__main__":
     main()
