@@ -90,7 +90,7 @@ def floor_dt(dt, delta):
     return dt - (dt - datetime.datetime.min.replace(tzinfo=dt.tzinfo)) % delta
 
 # EXECUÇÃO PRINCIPAL
-moeda = st.selectbox("Escolha a moeda:", ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"])
+moeda = st.selectbox("Escolha a moeda:", ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT","SYRUPUSDT", "ENAUSDT", "PEPEUSDT", "USDTUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "SHIBUSDT"])
 df = get_binance_data(moeda)
 
 if not df.empty and len(df) > 30:
