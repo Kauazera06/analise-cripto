@@ -5,23 +5,20 @@ import requests
 import datetime
 import plotly.graph_objects as go
 import pytz
-import time
+import joblib
 from streamlit_autorefresh import st_autorefresh
 
+
 st.set_page_config(layout="wide")
-st.title("📈 Analisador de Criptomoedas com Indicadores Técnicos e Alertas Telegram")
+st.title("📈 Analisador de Criptomoedas com Indicadores Técnicos, IA e Alertas Telegram")
+# Atualiza a página automaticamente a cada 5 minutos (300000 ms)
+st_autorefresh(interval=300000, key="auto_refresh")
 
-# Atualização automática a cada 5 minutos
-st_autorefresh(interval=300000, key="refresh")
-
-# Inicializa controle de último sinal
-if "ultimo_sinal" not in st.session_state:
-    st.session_state.ultimo_sinal = ""
-
-# CONFIG TELEGRAM
+# CONFIGS
 TOKEN = "7507470816:AAFpu1RRtGQYJfv1cuGjRsW4H87ryM1XsRY"
 CHAT_ID = "1705586919"
 
+# Função para enviar mensagem no Telegram
 def enviar_telegram(mensagem):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": mensagem}
@@ -31,6 +28,17 @@ def enviar_telegram(mensagem):
     except:
         return False
 
+# Pegar cotação atual USD-BRL (para converter dólar em real)
+def get_usd_brl():
+    try:
+        res = requests.get("https://economia.awesomeapi.com.br/json/last/USD-BRL")
+        data = res.json()
+        valor = float(data["USDBRL"]["bid"])
+        return valor
+    except:
+        return None
+
+# Função para obter dados da Binance
 def get_binance_data(symbol="BTCUSDT", interval="5m", limit=100):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
@@ -51,16 +59,7 @@ def get_binance_data(symbol="BTCUSDT", interval="5m", limit=100):
         st.error(f"Erro ao buscar dados da Binance: {e}")
         return pd.DataFrame()
 
-def get_usd_brl():
-    try:
-        url = "https://economia.awesomeapi.com.br/last/USD-BRL"
-        response = requests.get(url)
-        data = response.json()
-        return float(data["USDBRL"]["bid"])
-    except:
-        return None
-
-# Indicadores
+# Indicadores técnicos
 def RSI(df, period=14):
     delta = df["Close"].diff()
     gain = np.where(delta > 0, delta, 0)
@@ -106,17 +105,25 @@ def ADX(df, period=14):
 def floor_dt(dt, delta):
     return dt - (dt - datetime.datetime.min.replace(tzinfo=dt.tzinfo)) % delta
 
-# App
-moeda = st.selectbox("Escolha a moeda:", ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "SYRUPUSDT", "ENAUSDT", "PEPEUSDT", "USDTUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "SHIBUSDT"])
-df = get_binance_data(moeda)
-usd_brl = get_usd_brl()
+# Carregar modelo treinado IA
+try:
+    modelo_ia = joblib.load("modelo_trade_ia.pkl")
+except Exception as e:
+    st.error(f"Erro ao carregar modelo IA: {e}")
+    modelo_ia = None
 
-if not df.empty and len(df) > 30 and usd_brl:
+# Escolher moeda
+moeda = st.selectbox("Escolha a moeda:", ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT","SYRUPUSDT", "ENAUSDT", "PEPEUSDT", "USDTUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "SHIBUSDT"])
+df = get_binance_data(moeda)
+
+if not df.empty and len(df) > 30:
     tz = pytz.timezone("America/Sao_Paulo")
     df.index = df.index.tz_localize('UTC').tz_convert(tz)
+
     now = datetime.datetime.now(tz)
     interval = datetime.timedelta(minutes=5)
     now_floor = floor_dt(now, interval)
+
     df_plot = df[df.index <= now_floor]
 
     rsi_val = RSI(df).iloc[-1]
@@ -127,8 +134,14 @@ if not df.empty and len(df) > 30 and usd_brl:
     stoch_val = StochRSI(df).iloc[-1]
     adx_val = ADX(df).iloc[-1]
     close = df["Close"].iloc[-1]
-    close_brl = close * usd_brl
 
+    # Cotação USD-BRL
+    usd_brl = get_usd_brl()
+    if usd_brl is None:
+        st.warning("⚠️ Não foi possível obter cotação USD-BRL. Valores em reais não serão exibidos.")
+    preco_brl = close * usd_brl if usd_brl else None
+
+    # Lógica do sinal clássica
     if rsi_val < 30 and stoch_val < 0.2 and macd_val > signal_val and adx_val > 20:
         sinal = "🟢 Compra"
     elif rsi_val > 70 and stoch_val > 0.8 and macd_val < signal_val and adx_val > 20:
@@ -136,17 +149,33 @@ if not df.empty and len(df) > 30 and usd_brl:
     else:
         sinal = "⏳ Neutro"
 
-    st.subheader(f"📊 Sinal Atual: {sinal}")
-    st.metric("Preço Atual", f"${close:,.2f} | R$ {close_brl:,.2f}")
+    # Lógica do sinal IA
+    if modelo_ia is not None:
+        features = np.array([[rsi_val, macd_val, signal_val, hist_val, stoch_val, adx_val]])
+        predicao = modelo_ia.predict(features)[0]
+        mapa_sinais = {0: "🔴 Venda", 1: "⏳ Neutro", 2: "🟢 Compra"}
+        sinal_ia = mapa_sinais.get(predicao, "⏳ Neutro")
+    else:
+        sinal_ia = "Modelo IA não carregado"
+
+    st.subheader(f"📊 Sinal Atual (Indicadores): {sinal}")
+    if preco_brl:
+        st.metric("Preço Atual", f"${close:,.2f} / R$ {preco_brl:,.2f}")
+    else:
+        st.metric("Preço Atual", f"${close:,.2f}")
     st.write(f"- RSI: **{rsi_val:.2f}**")
     st.write(f"- MACD: **{macd_val:.2f}**, Sinal: **{signal_val:.2f}**, Histograma: **{hist_val:.2f}**")
     st.write(f"- StochRSI: **{stoch_val:.2f}**")
     st.write(f"- ADX: **{adx_val:.2f}**")
+    st.subheader(f"🤖 Sinal IA: {sinal_ia}")
 
     agora = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     mensagem = f"""📢 SINAL DE TRADE - {moeda}
 Sinal: {sinal}
-Preço: ${close:,.2f} | R$ {close_brl:,.2f}
+Preço: ${close:,.2f}"""
+    if preco_brl:
+        mensagem += f" / R$ {preco_brl:,.2f}"
+    mensagem += f"""
 Data/Horário: {agora}
 
 📊 Indicadores:
@@ -156,16 +185,13 @@ Sinal MACD: {signal_val:.2f}
 Histograma: {hist_val:.2f}
 StochRSI: {stoch_val:.2f}
 ADX: {adx_val:.2f}
+
+🤖 Sinal IA: {sinal_ia}
 """
+    if enviar_telegram(mensagem):
+        st.success("✅ Alerta enviado no Telegram!")
 
-    if st.session_state.ultimo_sinal != sinal:
-        if enviar_telegram(mensagem):
-            st.success("✅ Alerta enviado no Telegram!")
-            st.session_state.ultimo_sinal = sinal
-    else:
-        st.info("ℹ️ Sinal não mudou, alerta não reenviado.")
-
-    # Gráficos técnicos (mantidos conforme estavam)
+    # GRÁFICOS
     with st.expander("📉 Gráficos Técnicos"):
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["RSI", "MACD", "StochRSI", "ADX", "Preço"])
 
@@ -219,4 +245,4 @@ ADX: {adx_val:.2f}
             st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.warning("⚠️ Dados insuficientes ou erro ao converter dólar para real.")
+    st.warning("⚠️ Dados insuficientes. Verifique a conexão com a API ou aguarde alguns minutos.")

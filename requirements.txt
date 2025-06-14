@@ -7,3 +7,6 @@ requests
 python-binance
 yfinance
 python-telegram-bot
+joblib
+scikit-learn
+pytz
