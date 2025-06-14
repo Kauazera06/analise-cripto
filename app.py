@@ -6,19 +6,19 @@ import datetime
 import plotly.graph_objects as go
 import pytz
 import joblib
+import os
+import csv
+import matplotlib.pyplot as plt
+
 from streamlit_autorefresh import st_autorefresh
 
-
 st.set_page_config(layout="wide")
-st.title("📈 Analisador de Criptomoedas com Indicadores Técnicos, IA e Alertas Telegram")
-# Atualiza a página automaticamente a cada 5 minutos (300000 ms)
-st_autorefresh(interval=300000, key="auto_refresh")
+st.title("📈 Analisador de Criptomoedas com Indicadores Técnicos, IA e Sinais de Alerta via Telegram")
+st_autorefresh(interval=60000, key="auto_refresh")
 
-# CONFIGS
 TOKEN = "7507470816:AAFpu1RRtGQYJfv1cuGjRsW4H87ryM1XsRY"
 CHAT_ID = "1705586919"
 
-# Função para enviar mensagem no Telegram
 def enviar_telegram(mensagem):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": mensagem}
@@ -28,38 +28,29 @@ def enviar_telegram(mensagem):
     except:
         return False
 
-# Pegar cotação atual USD-BRL (para converter dólar em real)
 def get_usd_brl():
     try:
         res = requests.get("https://economia.awesomeapi.com.br/json/last/USD-BRL")
-        data = res.json()
-        valor = float(data["USDBRL"]["bid"])
-        return valor
+        return float(res.json()["USDBRL"]["bid"])
     except:
         return None
 
-# Função para obter dados da Binance
 def get_binance_data(symbol="BTCUSDT", interval="5m", limit=100):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
-        response = requests.get(url)
-        data = response.json()
+        data = requests.get(url).json()
         if not data:
             return pd.DataFrame()
-        df = pd.DataFrame(data, columns=[
-            "timestamp", "Open", "High", "Low", "Close", "Volume",
-            "Close_time", "Quote_asset_volume", "Number_of_trades",
-            "Taker_buy_base_volume", "Taker_buy_quote_volume", "Ignore"
-        ])
+        df = pd.DataFrame(data, columns=["timestamp", "Open", "High", "Low", "Close", "Volume", "Close_time",
+                                         "Quote_asset_volume", "Number_of_trades", "Taker_buy_base_volume",
+                                         "Taker_buy_quote_volume", "Ignore"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         df.set_index("timestamp", inplace=True)
-        df = df.astype(float)
-        return df
+        return df.astype(float)
     except Exception as e:
         st.error(f"Erro ao buscar dados da Binance: {e}")
         return pd.DataFrame()
 
-# Indicadores técnicos
 def RSI(df, period=14):
     delta = df["Close"].diff()
     gain = np.where(delta > 0, delta, 0)
@@ -67,102 +58,76 @@ def RSI(df, period=14):
     avg_gain = pd.Series(gain).rolling(window=period).mean()
     avg_loss = pd.Series(loss).rolling(window=period).mean()
     rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    return 100 - (100 / (1 + rs))
 
 def MACD(df):
     ema12 = df["Close"].ewm(span=12, adjust=False).mean()
     ema26 = df["Close"].ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    histogram = macd_line - signal_line
-    return macd_line, signal_line, histogram
+    return macd_line, signal_line, macd_line - signal_line
 
 def StochRSI(df, period=14):
     rsi = RSI(df, period)
     min_val = rsi.rolling(window=period).min()
     max_val = rsi.rolling(window=period).max()
-    stoch_rsi = (rsi - min_val) / (max_val - min_val)
-    return stoch_rsi
+    return (rsi - min_val) / (max_val - min_val)
 
 def ADX(df, period=14):
-    df["TR"] = np.maximum(df["High"] - df["Low"],
-                          np.maximum(abs(df["High"] - df["Close"].shift(1)),
-                                     abs(df["Low"] - df["Close"].shift(1))))
-    df["+DM"] = np.where((df["High"] - df["High"].shift(1)) > (df["Low"].shift(1) - df["Low"]),
-                         np.maximum(df["High"] - df["High"].shift(1), 0), 0)
-    df["-DM"] = np.where((df["Low"].shift(1) - df["Low"]) > (df["High"] - df["High"].shift(1)),
-                         np.maximum(df["Low"].shift(1) - df["Low"], 0), 0)
-    tr14 = df["TR"].rolling(window=period).sum()
-    plus_dm14 = df["+DM"].rolling(window=period).sum()
-    minus_dm14 = df["-DM"].rolling(window=period).sum()
+    df2 = df.copy()
+    df2["TR"] = np.maximum(df2["High"] - df2["Low"], np.maximum(abs(df2["High"] - df2["Close"].shift(1)), abs(df2["Low"] - df2["Close"].shift(1))))
+    df2["+DM"] = np.where((df2["High"] - df2["High"].shift(1)) > (df2["Low"].shift(1) - df2["Low"]), np.maximum(df2["High"] - df2["High"].shift(1), 0), 0)
+    df2["-DM"] = np.where((df2["Low"].shift(1) - df2["Low"]) > (df2["High"] - df2["High"].shift(1)), np.maximum(df2["Low"].shift(1) - df2["Low"], 0), 0)
+    tr14 = df2["TR"].rolling(window=period).sum()
+    plus_dm14 = df2["+DM"].rolling(window=period).sum()
+    minus_dm14 = df2["-DM"].rolling(window=period).sum()
     plus_di14 = 100 * (plus_dm14 / tr14)
     minus_di14 = 100 * (minus_dm14 / tr14)
     dx = 100 * abs(plus_di14 - minus_di14) / (plus_di14 + minus_di14)
-    adx = dx.rolling(window=period).mean()
-    return adx
+    return dx.rolling(window=period).mean()
 
 def floor_dt(dt, delta):
-    return dt - (dt - datetime.datetime.min.replace(tzinfo=dt.tzinfo)) % delta
+    seconds = (dt - datetime.datetime.min.replace(tzinfo=dt.tzinfo)).total_seconds()
+    delta_seconds = delta.total_seconds()
+    floored = seconds - (seconds % delta_seconds)
+    return datetime.datetime.min.replace(tzinfo=dt.tzinfo) + datetime.timedelta(seconds=floored)
 
-# Carregar modelo treinado IA
 try:
     modelo_ia = joblib.load("modelo_trade_ia.pkl")
 except Exception as e:
     st.error(f"Erro ao carregar modelo IA: {e}")
     modelo_ia = None
 
-# Escolher moeda
-moeda = st.selectbox("Escolha a moeda:", ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT","SYRUPUSDT", "ENAUSDT", "PEPEUSDT", "USDTUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "SHIBUSDT"])
+moeda = st.selectbox("Escolha a moeda:", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT"])
 df = get_binance_data(moeda)
 
 if not df.empty and len(df) > 30:
     tz = pytz.timezone("America/Sao_Paulo")
     df.index = df.index.tz_localize('UTC').tz_convert(tz)
-
     now = datetime.datetime.now(tz)
-    interval = datetime.timedelta(minutes=5)
-    now_floor = floor_dt(now, interval)
-
+    now_floor = floor_dt(now, datetime.timedelta(minutes=5))
     df_plot = df[df.index <= now_floor]
 
     rsi_val = RSI(df).iloc[-1]
     macd_line, signal_line, hist = MACD(df)
-    macd_val = macd_line.iloc[-1]
-    signal_val = signal_line.iloc[-1]
-    hist_val = hist.iloc[-1]
+    macd_val, signal_val, hist_val = macd_line.iloc[-1], signal_line.iloc[-1], hist.iloc[-1]
     stoch_val = StochRSI(df).iloc[-1]
     adx_val = ADX(df).iloc[-1]
     close = df["Close"].iloc[-1]
-
-    # Cotação USD-BRL
     usd_brl = get_usd_brl()
-    if usd_brl is None:
-        st.warning("⚠️ Não foi possível obter cotação USD-BRL. Valores em reais não serão exibidos.")
     preco_brl = close * usd_brl if usd_brl else None
 
-    # Lógica do sinal clássica
-    if rsi_val < 30 and stoch_val < 0.2 and macd_val > signal_val and adx_val > 20:
-        sinal = "🟢 Compra"
-    elif rsi_val > 70 and stoch_val > 0.8 and macd_val < signal_val and adx_val > 20:
-        sinal = "🔴 Venda"
-    else:
-        sinal = "⏳ Neutro"
+    sinal = "🟢 Compra" if rsi_val < 30 and stoch_val < 0.2 and macd_val > signal_val and adx_val > 20 \
+            else "🔴 Venda" if rsi_val > 70 and stoch_val > 0.8 and macd_val < signal_val and adx_val > 20 else "⏳ Neutro"
 
-    # Lógica do sinal IA
     if modelo_ia is not None:
-        features = np.array([[rsi_val, macd_val, signal_val, hist_val, stoch_val, adx_val]])
-        predicao = modelo_ia.predict(features)[0]
-        mapa_sinais = {0: "🔴 Venda", 1: "⏳ Neutro", 2: "🟢 Compra"}
-        sinal_ia = mapa_sinais.get(predicao, "⏳ Neutro")
+        pred = modelo_ia.predict(np.array([[rsi_val, macd_val, signal_val, hist_val, stoch_val, adx_val]]))[0]
+        sinal_ia = {0: "🔴 Venda", 1: "⏳ Neutro", 2: "🟢 Compra"}.get(pred, "⏳ Neutro")
     else:
         sinal_ia = "Modelo IA não carregado"
 
     st.subheader(f"📊 Sinal Atual (Indicadores): {sinal}")
-    if preco_brl:
-        st.metric("Preço Atual", f"${close:,.2f} / R$ {preco_brl:,.2f}")
-    else:
-        st.metric("Preço Atual", f"${close:,.2f}")
+    st.metric("Preço Atual", f"${close:,.2f}" + (f" / R$ {preco_brl:,.2f}" if preco_brl else ""))
     st.write(f"- RSI: **{rsi_val:.2f}**")
     st.write(f"- MACD: **{macd_val:.2f}**, Sinal: **{signal_val:.2f}**, Histograma: **{hist_val:.2f}**")
     st.write(f"- StochRSI: **{stoch_val:.2f}**")
@@ -188,10 +153,56 @@ ADX: {adx_val:.2f}
 
 🤖 Sinal IA: {sinal_ia}
 """
-    if enviar_telegram(mensagem):
-        st.success("✅ Alerta enviado no Telegram!")
 
-    # GRÁFICOS
+    ultimo_sinal_path = f"ultimo_sinal_{moeda}.txt"
+    historico_csv = f"historico_sinais_{moeda}.csv"
+
+    def sinal_mudou(novo):
+        if not os.path.exists(ultimo_sinal_path):
+            with open(ultimo_sinal_path, "w", encoding="utf-8") as f:
+                f.write(novo)
+            return True
+        with open(ultimo_sinal_path, "r", encoding="utf-8") as f:
+            anterior = f.read().strip()
+        if novo != anterior:
+            with open(ultimo_sinal_path, "w", encoding="utf-8") as f:
+                f.write(novo)
+            return True
+        return False
+
+    if sinal_mudou(sinal_ia):
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        file_exists = os.path.isfile(historico_csv)
+        with open(historico_csv, mode='a', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            if not file_exists:
+                writer.writerow(["timestamp", "sinal_ia"])
+            writer.writerow([now_str, sinal_ia])
+
+        if enviar_telegram(mensagem):
+            st.success("✅ Novo alerta IA enviado no Telegram!")
+    else:
+        st.info("ℹ️ Nenhuma mudança de sinal IA. Alerta não enviado.")
+
+    # Mostrar gráfico histórico
+    if os.path.exists(historico_csv):
+        df_historico = pd.read_csv(historico_csv, parse_dates=["timestamp"])
+        mapeamento = {"🔴 Venda": -1, "⏳ Neutro": 0, "🟢 Compra": 1}
+        df_historico['sinal_num'] = df_historico['sinal_ia'].map(mapeamento).fillna(0)
+
+        st.subheader("📈 Evolução dos Sinais IA ao longo do tempo")
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(df_historico['timestamp'], df_historico['sinal_num'], marker='o', linestyle='-')
+        ax.set_yticks([-1, 0, 1])
+        ax.set_yticklabels(["Venda 🔴", "Neutro ⏳", "Compra 🟢"])
+        ax.set_xlabel("Data/Hora")
+        ax.set_ylabel("Sinal IA")
+        ax.grid(True)
+        st.pyplot(fig)
+    else:
+        st.info("Nenhum histórico de sinais IA encontrado ainda.")
+
+    # Gráficos técnicos
     with st.expander("📉 Gráficos Técnicos"):
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["RSI", "MACD", "StochRSI", "ADX", "Preço"])
 
@@ -204,11 +215,11 @@ ADX: {adx_val:.2f}
             st.plotly_chart(fig, use_container_width=True)
 
         with tab2:
+            macd_l, signal_l, histo = MACD(df_plot)
             fig = go.Figure()
-            macd_plot_line, signal_plot_line, hist_plot = MACD(df_plot)
-            fig.add_trace(go.Scatter(x=df_plot.index, y=macd_plot_line, name="MACD", line=dict(color='blue')))
-            fig.add_trace(go.Scatter(x=df_plot.index, y=signal_plot_line, name="Sinal", line=dict(color='orange')))
-            fig.add_trace(go.Bar(x=df_plot.index, y=hist_plot, name="Histograma", marker_color='gray'))
+            fig.add_trace(go.Scatter(x=df_plot.index, y=macd_l, name="MACD", line=dict(color='blue')))
+            fig.add_trace(go.Scatter(x=df_plot.index, y=signal_l, name="Sinal", line=dict(color='orange')))
+            fig.add_trace(go.Bar(x=df_plot.index, y=histo, name="Histograma", marker_color='gray'))
             fig.update_layout(title="MACD", height=300)
             st.plotly_chart(fig, use_container_width=True)
 
@@ -228,20 +239,17 @@ ADX: {adx_val:.2f}
             st.plotly_chart(fig, use_container_width=True)
 
         with tab5:
-            fig = go.Figure(data=[
-                go.Candlestick(
-                    x=df_plot.index,
-                    open=df_plot["Open"],
-                    high=df_plot["High"],
-                    low=df_plot["Low"],
-                    close=df_plot["Close"],
-                    increasing_line_color='green',
-                    decreasing_line_color='red',
-                    name='Candlestick'
-                )
-            ])
-            fig.update_layout(title="Candlestick - Preço", height=400, xaxis_rangeslider_visible=False)
-            fig.update_xaxes(range=[df_plot.index.min(), df_plot.index.max()])
+            fig = go.Figure(data=[go.Candlestick(
+                x=df_plot.index,
+                open=df_plot["Open"],
+                high=df_plot["High"],
+                low=df_plot["Low"],
+                close=df_plot["Close"],
+                increasing_line_color='green',
+                decreasing_line_color='red',
+                name='Candlestick'
+            )])
+            fig.update_layout(title="Candlestick - Preço", height=400)
             st.plotly_chart(fig, use_container_width=True)
 
 else:
