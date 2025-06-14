@@ -3,15 +3,14 @@ import pandas as pd
 import numpy as np
 import requests
 import datetime
+import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
-st.title("🔍 Analisador de Criptomoedas com Indicadores Técnicos e Alertas Telegram")
+st.title("📈 Analisador de Criptomoedas com Indicadores Técnicos e Alertas Telegram")
 
-# ========== CONFIGURAÇÕES ==========
+# CONFIGS
 TOKEN = "7507470816:AAFpu1RRtGQYJfv1cuGjRsW4H87ryM1XsRY"
 CHAT_ID = "1705586919"
-
-# ========== FUNÇÕES ==========
 
 def enviar_telegram(mensagem):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -42,6 +41,7 @@ def get_binance_data(symbol="BTCUSDT", interval="5m", limit=100):
         st.error(f"Erro ao buscar dados da Binance: {e}")
         return pd.DataFrame()
 
+# Indicadores técnicos
 def RSI(df, period=14):
     delta = df["Close"].diff()
     gain = np.where(delta > 0, delta, 0)
@@ -84,14 +84,7 @@ def ADX(df, period=14):
     adx = dx.rolling(window=period).mean()
     return adx
 
-def Bollinger_Bands(df, window=20, num_std=2):
-    rolling_mean = df["Close"].rolling(window).mean()
-    rolling_std = df["Close"].rolling(window).std()
-    upper = rolling_mean + (rolling_std * num_std)
-    lower = rolling_mean - (rolling_std * num_std)
-    return upper, lower
-
-# ========== EXECUÇÃO ==========
+# EXECUÇÃO PRINCIPAL
 moeda = st.selectbox("Escolha a moeda:", ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"])
 df = get_binance_data(moeda)
 
@@ -105,7 +98,7 @@ if not df.empty and len(df) > 30:
     adx_val = ADX(df).iloc[-1]
     close = df["Close"].iloc[-1]
 
-    # ========== LÓGICA DE SINAL ==========
+    # Lógica do sinal
     if rsi_val < 30 and stoch_val < 0.2 and macd_val > signal_val and adx_val > 20:
         sinal = "🟢 Compra"
     elif rsi_val > 70 and stoch_val > 0.8 and macd_val < signal_val and adx_val > 20:
@@ -120,7 +113,7 @@ if not df.empty and len(df) > 30:
     st.write(f"- StochRSI: **{stoch_val:.2f}**")
     st.write(f"- ADX: **{adx_val:.2f}**")
 
-    # ========== ALERTA TELEGRAM ==========
+    # Telegram
     agora = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     mensagem = f"""📢 SINAL DE TRADE - {moeda}
 Sinal: {sinal}
@@ -135,10 +128,51 @@ Histograma: {hist_val:.2f}
 StochRSI: {stoch_val:.2f}
 ADX: {adx_val:.2f}
 """
-
     if enviar_telegram(mensagem):
         st.success("✅ Alerta enviado no Telegram!")
-    else:
-        st.warning("⚠️ Erro ao enviar o alerta no Telegram.")
+
+    # ==========================
+    # GRÁFICOS INTERATIVOS
+    # ==========================
+    with st.expander("📉 Gráficos Técnicos"):
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["RSI", "MACD", "StochRSI", "ADX", "Preço"])
+
+        with tab1:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df.index, y=RSI(df), name="RSI", line=dict(color='blue')))
+            fig.add_hline(y=70, line=dict(dash='dash', color='red'))
+            fig.add_hline(y=30, line=dict(dash='dash', color='green'))
+            fig.update_layout(title="RSI", height=300)
+            st.plotly_chart(fig, use_container_width=True)
+
+        with tab2:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df.index, y=macd_line, name="MACD", line=dict(color='blue')))
+            fig.add_trace(go.Scatter(x=df.index, y=signal_line, name="Sinal", line=dict(color='orange')))
+            fig.add_trace(go.Bar(x=df.index, y=hist, name="Histograma", marker_color='gray'))
+            fig.update_layout(title="MACD", height=300)
+            st.plotly_chart(fig, use_container_width=True)
+
+        with tab3:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df.index, y=StochRSI(df), name="StochRSI", line=dict(color='purple')))
+            fig.add_hline(y=0.8, line=dict(dash='dash', color='red'))
+            fig.add_hline(y=0.2, line=dict(dash='dash', color='green'))
+            fig.update_layout(title="StochRSI", height=300)
+            st.plotly_chart(fig, use_container_width=True)
+
+        with tab4:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df.index, y=ADX(df), name="ADX", line=dict(color='darkcyan')))
+            fig.add_hline(y=20, line=dict(dash='dash', color='orange'))
+            fig.update_layout(title="ADX", height=300)
+            st.plotly_chart(fig, use_container_width=True)
+
+        with tab5:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df.index, y=df["Close"], name="Preço", line=dict(color='black')))
+            fig.update_layout(title="Preço", height=300)
+            st.plotly_chart(fig, use_container_width=True)
+
 else:
-    st.warning("Dados insuficientes para análise. Verifique a conexão com a API da Binance.")
+    st.warning("⚠️ Dados insuficientes. Verifique a conexão com a API ou aguarde alguns minutos.")
